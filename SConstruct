@@ -1,6 +1,7 @@
 import os, sys
 from os.path import join as joinpath
 
+verbose = False
 useIcc = False
 #useIcc = True
 
@@ -13,14 +14,28 @@ def buildSim(cppFlags, dir, type, pgo=None):
     env = Environment(ENV = os.environ)
     env["CPPFLAGS"] = cppFlags
 
+    if not verbose:
+        env['CXXCOMSTR'] = "[cxx] $TARGET"
+        env['SHCXXCOMSTR'] = "[cxx sh] $TARGET"
+        env['LINKCOMSTR'] = "[link] $TARGET"
+        env['SHLINKCOMSTR'] = "[link sh] $TARGET"
+
+
     allSrcs = [f for dir, subdirs, files in os.walk("src") for f in Glob(dir + "/*")]
     versionFile = joinpath(buildDir, "version.h")
     if os.path.exists(".git"):
-        env.Command(versionFile, allSrcs + [".git/index", "SConstruct"],
-            'echo "#define ZSIM_BUILDDATE \\""`date`\\""\\\\n#define ZSIM_BUILDVERSION \\""`python misc/gitver.py`\\""" >>' + versionFile)
+        env.Command(
+            versionFile, allSrcs + ["SConstruct"],
+            r'echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
+            r'#define ZSIM_BUILDVERSION \"$$(python2 misc/gitver.py)\"" '
+            '> $TARGET')
     else:
-        env.Command(versionFile, allSrcs + ["SConstruct"],
-            'echo "#define ZSIM_BUILDDATE \\""`date`\\""\\\\n#define ZSIM_BUILDVERSION \\""no git repo\\""" >>' + versionFile)
+        env.Command(
+            versionFile, allSrcs + ["SConstruct"],
+            r'echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
+            r'#define ZSIM_BUILDVERSION \"no git repo\"" '
+            '> $TARGET')
+
 
     # Parallel builds?
     #env.SetOption('num_jobs', 32)
@@ -205,3 +220,5 @@ elif pgoPhase.startswith("use"):
 else:
     for type in buildTypes:
         buildSim(buildFlags[type], baseBuildDir, type)
+
+# vim: ft=python

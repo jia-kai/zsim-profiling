@@ -24,7 +24,7 @@ libEnv["LIBS"] += libEnv["PINLIBS"]
 libEnv.SharedLibrary("zsim.so", libSrcs)
 
 # Build harness (static to make it easier to run across environments)
-env["LINKFLAGS"] += " --static "
+# env["LINKFLAGS"] += " --static "
 env["LIBS"] += ["pthread"]
 env.Program("zsim", harnessSrcs + commonSrcs)
 
