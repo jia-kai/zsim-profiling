@@ -47,13 +47,13 @@ def buildSim(cppFlags, dir, type, pgo=None):
     if os.path.exists(".git"):
         env.Command(
             versionFile, allSrcs + ["SConstruct"],
-            r'echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
+            r'/bin/echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
             r'#define ZSIM_BUILDVERSION \"$$(python2 misc/gitver.py)\"" '
             '> $TARGET')
     else:
         env.Command(
             versionFile, allSrcs + ["SConstruct"],
-            r'echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
+            r'/bin/echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
             r'#define ZSIM_BUILDVERSION \"no git repo\"" '
             '> $TARGET')
 

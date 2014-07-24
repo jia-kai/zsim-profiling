@@ -41,10 +41,12 @@ static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int 
 static int rep_profile_frequency();
 
 void appprof_instrument_img(IMG img) {
-    RTN rtn = RTN_FindByName(img, "__profil");
+    if (IMG_Name(img).find("libc.so") == std::string::npos)
+        return;
+    RTN rtn = RTN_FindByName(img, "profil");
     if (rtn != RTN_Invalid()) {
         RTN_Replace(rtn, (AFUNPTR)rep_profil);
-        info("replace __profil in %s", IMG_Name(img).c_str());
+        info("replace profil in %s", IMG_Name(img).c_str());
         rtn = RTN_FindByName(img, "__profile_frequency");
         assert(rtn != RTN_Invalid());
         RTN_Replace(rtn, (AFUNPTR)rep_profile_frequency);
