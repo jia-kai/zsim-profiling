@@ -36,7 +36,7 @@ static size_t pc_offset;
 static u_int pc_scale;
 static int prof_trigger_phase;
 
-static inline void profil_count(void *pc);
+static inline void profil_count(size_t pc);
 static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale);
 static int rep_profile_frequency();
 
@@ -53,14 +53,13 @@ void appprof_instrument_img(IMG img) {
     }
 }
 
-void profil_count(void *pc) {
-    size_t i = (reinterpret_cast<size_t>(pc) - pc_offset) / 2;
+void profil_count(size_t pc) {
+    size_t i = (pc - pc_offset) / 2;
     if (sizeof (unsigned long long int) > sizeof (size_t))
         i = (unsigned long long int) i * pc_scale / 65536;
     else
         i = i / 65536 * pc_scale + i % 65536 * pc_scale / 65536;
     if (i < nsamples) {
-        // info("prof: t=%d pc=%p pc_offset=%zx", PIN_ThreadId(), pc, pc_offset);
         __sync_fetch_and_add(samples + i, 1);
     }
 }
@@ -89,11 +88,11 @@ int rep_profile_frequency() {
 void appprof_on_core_phase_end(BblInfo *bbl) {
     static int nr_phase;
     if (samples) {
-        if (__sync_add_and_fetch(&nr_phase, 1) >= prof_trigger_phase) {
-            nr_phase = 0;
+        if (__sync_add_and_fetch(&nr_phase, 1) == prof_trigger_phase) {
+            __sync_sub_and_fetch(&nr_phase, prof_trigger_phase);
             // random offset to scatter the samples in a bbl
             int offset = int(rand() / (RAND_MAX + 1.0) * bbl->bytes);
-            profil_count(reinterpret_cast<void*>(bbl->start_addr + offset));
+            profil_count(bbl->start_addr + offset);
         }
     }
 }
