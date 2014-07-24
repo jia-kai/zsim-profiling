@@ -116,9 +116,11 @@ void SimpleCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
         core->phaseEndCycle += zinfo->phaseLength;
 
+        onCorePhaseEnd(tid, bblInfo);
+
         uint32_t cid = getCid(tid);
         //NOTE: TakeBarrier may take ownership of the core, and so it will be used by some other thread. If TakeBarrier context-switches us,
-        //the *only* safe option is to return inmmediately after we detect this, or we can race and corrupt core state. If newCid == cid,
+        //the *only* safe option is to return immediately after we detect this, or we can race and corrupt core state. If newCid == cid,
         //we're not at risk of racing, even if we were switched out and then switched in.
         uint32_t newCid = TakeBarrier(tid, cid);
         if (newCid != cid) break; /*context-switch*/

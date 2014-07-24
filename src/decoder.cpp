@@ -1443,6 +1443,7 @@ BblInfo* Decoder::decodeBbl(BBL bbl, bool oooDecoding) {
     }
 
     //Initialize generic part
+    bblInfo->start_addr = BBL_Address(bbl);
     bblInfo->instrs = instrs;
     bblInfo->bytes = bytes;
 

@@ -1,9 +1,30 @@
-import os, sys
+import os
+import re
+import sys
 from os.path import join as joinpath
 
 verbose = False
 useIcc = False
 #useIcc = True
+
+SYSCALL_HEADER_FILE = '/usr/include/asm/unistd_64.h'
+
+syscall_name_re = re.compile('^#define __NR_([a-zA-Z_0-9]*) ([0-9]*)$')
+
+def gen_syscall_name(target, source, env):
+    with open(str(source[0])) as fin:
+        num2name = dict()
+        for line in fin.readlines():
+            m = syscall_name_re.match(line)
+            if m:
+                num2name[int(m.group(2))] = m.group(1)
+
+    call_names = [num2name.get(i, '<unknown>') for i in
+                  range(max(num2name.keys()) + 1)]
+    with open(str(target[0]), 'w') as fout:
+        for i in call_names:
+            fout.write('"{}",\n'.format(i))
+
 
 def buildSim(cppFlags, dir, type, pgo=None):
     ''' Build the simulator with a specific base buid dir and config type'''
@@ -35,6 +56,9 @@ def buildSim(cppFlags, dir, type, pgo=None):
             r'echo -e "#define ZSIM_BUILDDATE \"$$(LC_ALL=C date)\"\n'
             r'#define ZSIM_BUILDVERSION \"no git repo\"" '
             '> $TARGET')
+
+    env.Command(joinpath(buildDir, "syscall_name_list.h"), [SYSCALL_HEADER_FILE],
+                gen_syscall_name)
 
 
     # Parallel builds?

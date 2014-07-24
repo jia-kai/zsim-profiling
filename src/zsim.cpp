@@ -56,8 +56,8 @@
 #include "profile_stats.h"
 #include "scheduler.h"
 #include "stats.h"
-//#include "syscall_funcs.h"
 #include "virt/virt.h"
+#include "app_prof.h"
 
 //#include <signal.h> //can't include this, conflicts with PIN's
 
@@ -589,8 +589,28 @@ VOID Instruction(INS ins) {
     VdsoInstrument(ins);
 }
 
+static bool TraceShouldInstrument(TRACE trace) {
+    RTN rtn = TRACE_Rtn(trace);
+    if (!RTN_Valid(rtn))
+        return true;
+
+    IMG img = SEC_Img(RTN_Sec(rtn));
+    std::string img_name = IMG_Name(img);
+    if (img_name.find("libc.so") == std::string::npos)
+        return true;
+    std::string fname = RTN_Name(rtn);
+
+    // do not instrument mcount for performance considerations
+    if (fname.find("mcount") != std::string::npos) {
+        info("do not instrument %s:%s", img_name.c_str(), fname.c_str());
+        return false;
+    }
+    return true;
+}
 
 VOID Trace(TRACE trace, VOID *v) {
+    if (!TraceShouldInstrument(trace))
+        return;
     if (!procTreeNode->isInFastForward() || !zinfo->ffReinstrument) {
         // Visit every basic block in the trace
         for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
@@ -1427,6 +1447,14 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
     return EHR_CONTINUE_SEARCH; //we never solve anything at all :P
 }
 
+VOID OnImageLoad(IMG img, void*) {
+    appprof_instrument_img(img);
+}
+
+void onCorePhaseEnd(uint32_t tid, BblInfo *bblInfo) {
+    appprof_on_core_phase_end(bblInfo);
+}
+
 /* ===================================================================== */
 
 int main(int argc, char *argv[]) {
@@ -1532,6 +1560,8 @@ int main(int argc, char *argv[]) {
 
     //Register instrumentation
     TRACE_AddInstrumentFunction(Trace, 0);
+    IMG_AddInstrumentFunction(OnImageLoad, 0);
+
     VdsoInit(); //initialized vDSO patching information (e.g., where all the possible vDSO entry points are)
 
     PIN_AddThreadStartFunction(ThreadStart, 0);

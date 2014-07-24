@@ -1,6 +1,5 @@
 /** $lic$
- * Copyright (C) 2012-2014 by Massachusetts Institute of Technology
- * Copyright (C) 2010-2013 by The Board of Trustees of Stanford University
+ * Copyright (C) 2014 by Kai Jia <jia.kai66@gmail.com>
  *
  * This file is part of zsim.
  *
@@ -23,19 +22,16 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-// Put this before any includes
-#define QUOTED_(x) #x
-#define QUOTED(x) QUOTED_(x)
+#pragma once
 
-#define __SYSCALL(a, b) QUOTED(b),
+/*
+ * allow the application to be profiled with standard gprof mechanism
+ */
 
-static const char* syscallNames[] = {
-#include "syscall_name_list.h"
-};
+#include <pin.H>
 
-#include <stdint.h>
+#include "core.h"
 
-const char* GetSyscallName(uint32_t syscall) {
-    return (syscall >= sizeof(syscallNames)/sizeof(syscallNames[0]))? "INVALID" : syscallNames[syscall];
-}
+void appprof_instrument_img(IMG img);
 
+void appprof_on_core_phase_end(BblInfo *bbl);
