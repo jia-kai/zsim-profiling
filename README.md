@@ -64,7 +64,9 @@ To support gperftools in zsim, two new configuration options are introduced:
 
 If `sys.gperftools.outputName` is set, then zsim would backtrace the simulated
 program every `samplePhase` phases and record the statistics. The profiling
-result could be analysed by the `pprof` program shipped with gperftools.
+result could be analysed by the `pprof` program shipped with gperftools. Note
+that a program needs no modification to be profiled, and should not be linked
+against gperftools library, since related code is included in zsim.
 
 zsim
 ====
