@@ -26,6 +26,7 @@
 #include "timing_core.h"
 #include "filter_cache.h"
 #include "zsim.h"
+#include "app_prof.h"
 
 #define DEBUG_MSG(args...)
 //#define DEBUG_MSG(args...) info(args)
@@ -116,11 +117,19 @@ void TimingCore::StoreAndRecordFunc(THREADID tid, ADDRINT addr) {
 
 void TimingCore::BblAndRecordFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     TimingCore* core = static_cast<TimingCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bblAndRecord(bblAddr, bblInfo);
 
+    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+
     while (core->curCycle > core->phaseEndCycle) {
+
+        appprof_on_core_phase_end(tid,
+                AppProfContext{stackCtx.rbp, stackCtx.rsp,
+                    bblAddr, bblInfo->bytes,
+                    startCycle, std::max(startCycle, core->phaseEndCycle), core->curCycle});
+
         core->phaseEndCycle += zinfo->phaseLength;
-        onCorePhaseEnd(tid, bblInfo);
         uint32_t cid = getCid(tid);
         uint32_t newCid = TakeBarrier(tid, cid);
         if (newCid != cid) break; /*context-switch*/

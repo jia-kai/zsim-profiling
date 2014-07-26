@@ -172,7 +172,11 @@ VOID PIN_FAST_ANALYSIS_CALL IndirectStoreSingle(THREADID tid, ADDRINT addr) {
     fPtrs[tid].storePtr(tid, addr);
 }
 
-VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo, ADDRINT rbp, ADDRINT rsp) {
+    if (rbp) {
+        zinfo->stackCtxOnFuncEntry[tid].rbp = rbp;
+        zinfo->stackCtxOnFuncEntry[tid].rsp = rsp;
+    }
     fPtrs[tid].bblPtr(tid, bblAddr, bblInfo);
 }
 
@@ -611,12 +615,34 @@ static bool TraceShouldInstrument(TRACE trace) {
 VOID Trace(TRACE trace, VOID *v) {
     if (!TraceShouldInstrument(trace))
         return;
+
     if (!procTreeNode->isInFastForward() || !zinfo->ffReinstrument) {
+        bool isFuncEntry = false;
+
+        {
+            RTN rtn = TRACE_Rtn(trace);
+            if (rtn != RTN_Invalid()) {
+                RTN_Open(rtn);
+                INS ins_rtn = RTN_InsHeadOnly(rtn),
+                    ins_trace = BBL_InsHead(TRACE_BblHead(trace));
+                if (ins_rtn != INS_Invalid() && ins_trace != INS_Invalid() &&
+                        INS_Address(ins_rtn) == INS_Address(ins_trace)) {
+                    isFuncEntry = true;
+                }
+                RTN_Close(rtn);
+            }
+        }
+
         // Visit every basic block in the trace
         for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
             BblInfo* bblInfo = Decoder::decodeBbl(bbl, zinfo->oooDecode);
-            BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
-                 IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_END);
+            if (isFuncEntry) {
+                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
+                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_REG_VALUE, REG_RBP, IARG_REG_VALUE, REG_RSP, IARG_END);
+            } else {
+                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
+                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_ADDRINT, 0, IARG_ADDRINT, 0, IARG_END);
+            }
         }
     }
 
@@ -870,6 +896,7 @@ VOID ThreadStart(THREADID tid, CONTEXT *ctxt, INT32 flags, VOID *v) {
      * It's here and not in main() because that way the auxiliary threads can
      * start.
      */
+    zinfo->stackCtxOnFuncEntry[tid].stack_top = PIN_GetContextReg(ctxt, REG_RSP);
     if (procTreeNode->isInPause()) {
         futex_lock(&zinfo->pauseLocks[procIdx]);  // initialize
         info("Pausing until notified");
@@ -1138,6 +1165,7 @@ VOID SimEnd() {
         zinfo->compactStatsBackend->dump(false);
 
         zinfo->sched->notifyTermination();
+        appprof_fini();
     }
 
     //Uncomment when debugging termination races, which can be rare because they are triggered by threads of a dying process
@@ -1449,10 +1477,6 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
 
 VOID OnImageLoad(IMG img, void*) {
     appprof_instrument_img(img);
-}
-
-void onCorePhaseEnd(uint32_t tid, BblInfo *bblInfo) {
-    appprof_on_core_phase_end(bblInfo);
 }
 
 /* ===================================================================== */

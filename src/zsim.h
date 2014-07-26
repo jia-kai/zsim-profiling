@@ -170,6 +170,18 @@ struct GlobSimInfo {
     lock_t pauseLocks[256]; //per-process pauses
     volatile bool globalPauseFlag; //if set, pauses simulation on phase end
     volatile bool externalTermPending;
+
+    struct StackContext {
+        uintptr_t stack_top, rbp, rsp;
+    };
+
+    const char* gperftoolsOutputName;   // NULL if profiling not enabled
+    int gperftoolsSamplePhase;  // number of phases for a sample
+
+    // used for backtracing the program being simulated
+    // updated when entering a function except stack_top which is set when
+    // entering a thread
+    StackContext stackCtxOnFuncEntry[MAX_THREADS];
 };
 
 
@@ -185,8 +197,5 @@ extern GlobSimInfo* zinfo;
 uint32_t getCid(uint32_t tid);
 uint32_t TakeBarrier(uint32_t tid, uint32_t cid);
 void SimEnd(); //only call point out of zsim.cpp should be watchdog threads
-
-struct BblInfo;
-void onCorePhaseEnd(uint32_t tid, BblInfo *bblInfo);
 
 #endif  // ZSIM_H_

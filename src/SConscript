@@ -14,7 +14,7 @@ excludeSrcs = [
 excludeSrcs += harnessSrcs
 
 # Build libzsim.so
-globSrcNodes = Glob("*.cpp") + Glob("virt/*.cpp")
+globSrcNodes = Glob("*.cpp") + Glob("virt/*.cpp") + Glob('gperftools/*.cpp')
 libSrcs = [str(x) for x in globSrcNodes if str(x) not in excludeSrcs]
 libEnv = env.Clone()
 libEnv["CPPFLAGS"] += libEnv["PINCPPFLAGS"]
@@ -30,3 +30,5 @@ env.Program("zsim", harnessSrcs + commonSrcs)
 
 # Build additional utilities below
 env.Program("fftoggle", ["fftoggle.cpp"] + commonSrcs)
+
+# vim: ft=python

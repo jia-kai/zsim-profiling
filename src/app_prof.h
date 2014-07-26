@@ -25,13 +25,35 @@
 #pragma once
 
 /*
- * allow the application to be profiled with standard gprof mechanism
+ * profile the application being simulated
+ *
+ * the program is sampled on phase end, and statistics are fed to gperftools
+ * (https://code.google.com/p/gperftools/) for further processing
  */
 
 #include <pin.H>
 
-#include "core.h"
+#include "log.h"
+
+struct AppProfContext {
+    uintptr_t rbp, rsp, pc;
+
+    AppProfContext(uintptr_t rbp_, uintptr_t rsp_,
+            uintptr_t bbl_start, uintptr_t bbl_length,
+            uint64_t start_cycle, uint64_t cur_cycle, uint64_t end_cycle):
+        rbp(rbp_), rsp(rsp_),
+
+        // assume all instructions have same length to calc pc
+        pc(bbl_start + bbl_length * (cur_cycle - start_cycle) / (end_cycle - start_cycle))
+    {
+        assert_msg(cur_cycle >= start_cycle && cur_cycle <= end_cycle,
+                "phase=%zd-%zd cur_cycle=%zx", start_cycle, end_cycle, cur_cycle);
+    }
+};
+
+void appprof_init();
+void appprof_fini();
 
 void appprof_instrument_img(IMG img);
 
-void appprof_on_core_phase_end(BblInfo *bbl);
+void appprof_on_core_phase_end(uint32_t tid, const AppProfContext &ctx);

@@ -70,6 +70,7 @@
 #include "virt/port_virtualizer.h"
 #include "weave_md1_mem.h" //validation, could be taken out...
 #include "zsim.h"
+#include "app_prof.h"
 
 extern void EndOfPhaseActions(); //in zsim.cpp
 
@@ -773,10 +774,12 @@ static void InitGlobalStats() {
 
 
 void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
+    Config config(configFile);
+
     zinfo = gm_calloc<GlobSimInfo>();
     zinfo->outputDir = gm_strdup(outputDir);
-
-    Config config(configFile);
+    zinfo->gperftoolsOutputName = config.get<const char*>("sys.gperftools.outputName", nullptr);
+    zinfo->gperftoolsSamplePhase = config.get<uint32_t>("sys.gperftools.samplePhase", 1);
 
     //Debugging
     //NOTE: This should be as early as possible, so that we can attach to the debugger before initialization.
@@ -912,6 +915,8 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
     config.writeAndClose((string(zinfo->outputDir) + "/out.cfg").c_str(), strictConfig);
 
     zinfo->contentionSim->postInit();
+
+    appprof_init();
 
     info("Initialization complete");
 

@@ -369,6 +369,7 @@ class OOOCore : public Core {
         uint64_t regScoreboard[MAX_REGISTERS]; //contains timestamp of next issue cycles where each reg can be sourced
 
         BblInfo* prevBbl;
+        ADDRINT prevBblAddr;
 
         //Record load and store addresses
         Address loadAddrs[256];

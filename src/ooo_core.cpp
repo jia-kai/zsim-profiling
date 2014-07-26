@@ -31,6 +31,7 @@
 #include "decoder.h"
 #include "filter_cache.h"
 #include "zsim.h"
+#include "app_prof.h"
 
 /* Uncomment to induce backpressure to the IW when the load/store buffers fill up. In theory, more detailed,
  * but sometimes much slower (as it relies on range poisoning in the IW, potentially O(n^2)), and in practice
@@ -159,6 +160,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     if (!prevBbl) {
         // This is the 1st BBL since scheduled, nothing to simulate
         prevBbl = bblInfo;
+        prevBblAddr = bblAddr;
         // Kill lingering ops from previous BBL
         loads = stores = 0;
         return;
@@ -169,6 +171,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     uint32_t bblInstrs = prevBbl->instrs;
     DynBbl* bbl = &(prevBbl->oooBbl[0]);
     prevBbl = bblInfo;
+    prevBblAddr = bblAddr;
 
     uint32_t loadIdx = 0;
     uint32_t storeIdx = 0;
@@ -501,12 +504,19 @@ void OOOCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 
 void OOOCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bbl(bblAddr, bblInfo);
 
-    while (core->curCycle > core->phaseEndCycle) {
-        core->phaseEndCycle += zinfo->phaseLength;
+    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
 
-        onCorePhaseEnd(tid, core->prevBbl);
+    while (core->curCycle > core->phaseEndCycle) {
+
+        appprof_on_core_phase_end(tid,
+                AppProfContext{stackCtx.rbp, stackCtx.rsp,
+                    core->prevBblAddr, core->prevBbl->bytes,
+                    startCycle, core->phaseEndCycle, core->curCycle});
+
+        core->phaseEndCycle += zinfo->phaseLength;
 
         uint32_t cid = getCid(tid);
         // NOTE: TakeBarrier may take ownership of the core, and so it will be used by some other thread. If TakeBarrier context-switches us,

@@ -26,6 +26,7 @@
 #include "simple_core.h"
 #include "filter_cache.h"
 #include "zsim.h"
+#include "app_prof.h"
 
 SimpleCore::SimpleCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name) : Core(_name), l1i(_l1i), l1d(_l1d), instrs(0), curCycle(0), haltedCycles(0) {
 }
@@ -110,13 +111,20 @@ void SimpleCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 
 void SimpleCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     SimpleCore* core = static_cast<SimpleCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bbl(bblAddr, bblInfo);
+
+    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
 
     while (core->curCycle > core->phaseEndCycle) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
-        core->phaseEndCycle += zinfo->phaseLength;
 
-        onCorePhaseEnd(tid, bblInfo);
+        appprof_on_core_phase_end(tid,
+                AppProfContext{stackCtx.rbp, stackCtx.rsp,
+                    bblAddr, bblInfo->bytes,
+                    startCycle, std::max(startCycle, core->phaseEndCycle), core->curCycle});
+
+        core->phaseEndCycle += zinfo->phaseLength;
 
         uint32_t cid = getCid(tid);
         //NOTE: TakeBarrier may take ownership of the core, and so it will be used by some other thread. If TakeBarrier context-switches us,

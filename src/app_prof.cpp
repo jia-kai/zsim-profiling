@@ -25,22 +25,46 @@
 #include "app_prof.h"
 #include "log.h"
 #include "zsim.h"
+#include "gperftools/profiledata.h"
 
-constexpr int PROF_FREQ = 1000;
-/*
- * profil_count and related are copied from glibc
- */
-static u_short *samples;
-static size_t nsamples;
-static size_t pc_offset;
-static u_int pc_scale;
-static int prof_trigger_phase;
+namespace gprof {
 
-static inline void profil_count(size_t pc);
-static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale);
-static int rep_profile_frequency();
+    constexpr int PROF_FREQ = 1000;
+    /*
+     * profil_count and related are copied from glibc
+     */
+    static u_short *samples;
+    static size_t nsamples;
+    static size_t pc_offset;
+    static u_int pc_scale;
+    static int prof_trigger_phase;
 
-void appprof_instrument_img(IMG img) {
+    static void instrument_img(IMG img);
+    static inline void profil_count(size_t pc);
+    static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale);
+    static int rep_profile_frequency();
+    static inline void on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
+}
+
+namespace gperftools {
+    lock_t profile_data_lock;
+    static ProfileData profile_data;
+    static int sample_phase, cur_phase;
+
+    template<typename T>
+    static T deref_ptr(uintptr_t ptr) {
+        return reinterpret_cast<T>(*reinterpret_cast<uintptr_t*>(ptr));
+    };
+
+    static inline void on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
+    static void init();
+    static void fini();
+};
+
+
+
+/* ===================== gprof begins =============================== */
+void gprof::instrument_img(IMG img) {
     if (IMG_Name(img).find("libc.so") == std::string::npos)
         return;
     RTN rtn = RTN_FindByName(img, "profil");
@@ -53,7 +77,7 @@ void appprof_instrument_img(IMG img) {
     }
 }
 
-void profil_count(size_t pc) {
+void gprof::profil_count(size_t pc) {
     size_t i = (pc - pc_offset) / 2;
     if (sizeof (unsigned long long int) > sizeof (size_t))
         i = (unsigned long long int) i * pc_scale / 65536;
@@ -65,7 +89,7 @@ void profil_count(size_t pc) {
 }
 
 
-int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale) {
+int gprof::rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale) {
     if (!sample_buffer) {
         samples = nullptr;
         warn("profiling disabled");
@@ -81,19 +105,89 @@ int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale) 
     return 0;
 }
 
-int rep_profile_frequency() {
+int gprof::rep_profile_frequency() {
     return PROF_FREQ;
 }
 
-void appprof_on_core_phase_end(BblInfo *bbl) {
+void gprof::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
     static int nr_phase;
-    if (samples) {
-        if (__sync_add_and_fetch(&nr_phase, 1) == prof_trigger_phase) {
-            __sync_sub_and_fetch(&nr_phase, prof_trigger_phase);
-            // random offset to scatter the samples in a bbl
-            int offset = int(rand() / (RAND_MAX + 1.0) * bbl->bytes);
-            profil_count(bbl->start_addr + offset);
-        }
+    if (__sync_add_and_fetch(&nr_phase, 1) == prof_trigger_phase) {
+        __sync_sub_and_fetch(&nr_phase, prof_trigger_phase);
+        profil_count(ctx.pc);
     }
 }
+/* ===================== gprof ends =============================== */
 
+
+/* ===================== gperftools begins =============================== */
+void gperftools::init() {
+    if (!zinfo->gperftoolsOutputName)
+        return;
+    sample_phase = zinfo->gperftoolsSamplePhase;
+    futex_init(&profile_data_lock);
+    ProfileData::Options opt;
+    opt.set_frequency((long long)zinfo->freqMHz * 1000000 / (
+                zinfo->phaseLength * sample_phase));
+    profile_data.Start(zinfo->gperftoolsOutputName, opt);
+}
+
+void gperftools::fini() {
+    if (!zinfo->gperftoolsOutputName)
+        return;
+    profile_data.Stop();
+}
+
+void gperftools::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
+    if (sample_phase > 1) {
+        if (__sync_add_and_fetch(&cur_phase, 1) != sample_phase)
+            return;
+
+        __sync_fetch_and_sub(&cur_phase, sample_phase);
+    }
+
+    constexpr int MAX_DEPTH = ProfileData::kMaxStackDepth;
+    void *stack[MAX_DEPTH];
+    stack[0] = reinterpret_cast<void*>(ctx.pc);
+    stack[1] = deref_ptr<void*>(ctx.rsp);
+    int depth = 2;
+
+    // Check whether rbp lies in stack range during backtracing.
+    // This could be wrong if the compiler decides to use rbp as a general
+    // register for optimization and rbp happens to store a pointer inside the
+    // stack
+    if (ctx.rbp > ctx.rsp) {
+        auto top = zinfo->stackCtxOnFuncEntry[tid].stack_top;
+        auto rbp = ctx.rbp;
+        while (rbp < top && depth < MAX_DEPTH) {
+            stack[depth ++] = deref_ptr<void*>(rbp + sizeof(void*));
+            auto new_rbp = deref_ptr<uintptr_t>(rbp);
+            if (new_rbp <= rbp)
+                break;
+            rbp = new_rbp;
+        }
+    }
+
+    futex_lock(&profile_data_lock);
+    profile_data.Add(depth, stack);
+    futex_unlock(&profile_data_lock);
+}
+/* ===================== gperftools ends =============================== */
+
+void appprof_init() {
+    gperftools::init();
+}
+
+void appprof_fini() {
+    gperftools::fini();
+}
+
+void appprof_instrument_img(IMG img) {
+    gprof::instrument_img(img);
+}
+
+void appprof_on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
+    if (gprof::samples)
+        gprof::on_core_phase_end(tid, ctx);
+    if (zinfo->gperftoolsOutputName)
+        gperftools::on_core_phase_end(tid, ctx);
+}
