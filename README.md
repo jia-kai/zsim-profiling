@@ -1,9 +1,70 @@
 zsim-profiling
 ===============
 
-zsim with application profiling support
+zsim with application profiling support. Currently
+[gprof](https://sourceware.org/binutils/docs/gprof/) and
+[gperftools](https://code.google.com/p/gperftools/)
+are supported.
+
+gprof
+-------
+
+gprof basically contains two parts: statistical sampling and accurate function call counting.
+When compiling a program with `-pg` option, gcc does two things:
+
+1. Link against `gcrt1.o` instead of `crt1.o`, which calls `__monstartup`
+   during initializing.  `__monstartup` would finally call `__profil` to start
+   profiling. `__profil` basically updates an array of counters in fixed time
+   intervals, and each counter in the array corresponds to a PC location in the
+   binary. See [here](http://bazaar.launchpad.net/~vcs-imports/glibc/master/view/head:/csu/gmon-start.c),
+   [here](http://bazaar.launchpad.net/~vcs-imports/glibc/master/view/head:/gmon/gmon.c)
+   and [there](http://bazaar.launchpad.net/~vcs-imports/glibc/master/view/head:/sysdeps/posix/profil.c)
+   for related source.
+
+2. Call [mcount](http://bazaar.launchpad.net/~vcs-imports/glibc/master/view/head:/gmon/mcount.c)
+   when entering a function, which extracts and records current function and
+   its caller to count function calls and generate call graph.
+
+To support gprof in zsim, we just need to replace `__profil` with a new
+implementation, which manipulates the buffer after a phase ends. Also, the
+functions containing `mcount` in libc.so would not be instrumented, so they
+would not be counted as simulated cycles. Therefore a program compiled with
+`-pg` could also be transparently profiled in zsim with little overhead.
 
 
+gperftools
+------------
+
+gperftools is a set of performance related tools developed by Google, including
+a CPU profiler. Compared with gprof, it has following advantages:
+
+1. The sample buffer is not `short int` (as in `__profil`), so profiling a
+   long-run program would not cause arithmetic overflow.
+
+2. It records the whole backtrace rather than only a pair of caller and callee,
+   enabling more accurate and informative analysis.
+
+3. The analysing program pprof is more powerful and user-friendly than gprof.
+   (e.g. it could generate graphical call graph)
+
+However, without compiler support it could not count function calls.
+
+gperftools is implemented by setting up a timer with `setitimer` syscall to
+periodically invoke a handler to record backtrace and update statistics.
+
+To support gperftools in zsim, two new configuration options are introduced:
+
+    sys = {
+        // ...
+        gperftools = {
+            outputName = "gperf.out";
+            // samplePhase = 1;
+        };
+    }
+
+If `sys.gperftools.outputName` is set, then zsim would backtrace the simulated
+program every `samplePhase` phases and record the statistics. The profiling
+result could be analysed by the `pprof` program shipped with gperftools.
 
 zsim
 ====
