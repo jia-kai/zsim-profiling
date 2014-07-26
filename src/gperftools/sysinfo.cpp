@@ -258,11 +258,12 @@ static bool ReadIntFromFile(const char *file, int *value) {
     char line[1024];
     char* err;
     memset(line, '\0', sizeof(line));
-    read(fd, line, sizeof(line) - 1);
-    const int temp_value = strtol(line, &err, 10);
-    if (line[0] != '\0' && (*err == '\n' || *err == '\0')) {
-      *value = temp_value;
-      ret = true;
+    if (read(fd, line, sizeof(line) - 1) > 0) {
+        const int temp_value = strtol(line, &err, 10);
+        if (line[0] != '\0' && (*err == '\n' || *err == '\0')) {
+            *value = temp_value;
+            ret = true;
+        }
     }
     close(fd);
   }

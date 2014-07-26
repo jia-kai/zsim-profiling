@@ -27,6 +27,9 @@
 #include "zsim.h"
 #include "gperftools/profiledata.h"
 
+#include <sys/time.h>
+#include <sys/resource.h>
+
 namespace gprof {
 
     constexpr int PROF_FREQ = 1000;
@@ -50,6 +53,7 @@ namespace gperftools {
     lock_t profile_data_lock;
     static ProfileData profile_data;
     static int sample_phase, cur_phase;
+    static uintptr_t stack_size;
 
     template<typename T>
     static T deref_ptr(uintptr_t ptr) {
@@ -129,6 +133,10 @@ void gperftools::init() {
     opt.set_frequency((long long)zinfo->freqMHz * 1000000 / (
                 zinfo->phaseLength * sample_phase));
     profile_data.Start(zinfo->gperftoolsOutputName, opt);
+
+    struct rlimit rlim;
+    getrlimit(RLIMIT_STACK, &rlim);
+    stack_size = rlim.rlim_cur;
 }
 
 void gperftools::fini() {
@@ -148,22 +156,26 @@ void gperftools::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
     constexpr int MAX_DEPTH = ProfileData::kMaxStackDepth;
     void *stack[MAX_DEPTH];
     stack[0] = reinterpret_cast<void*>(ctx.pc);
-    stack[1] = deref_ptr<void*>(ctx.rsp);
-    int depth = 2;
+    int depth = 1;
+    auto top = zinfo->stackCtxOnFuncEntry[tid].stack_top,
+         bottom = top - stack_size;
 
-    // Check whether rbp lies in stack range during backtracing.
-    // This could be wrong if the compiler decides to use rbp as a general
-    // register for optimization and rbp happens to store a pointer inside the
-    // stack
-    if (ctx.rbp > ctx.rsp) {
-        auto top = zinfo->stackCtxOnFuncEntry[tid].stack_top;
-        auto rbp = ctx.rbp;
-        while (rbp < top && depth < MAX_DEPTH) {
-            stack[depth ++] = deref_ptr<void*>(rbp + sizeof(void*));
-            auto new_rbp = deref_ptr<uintptr_t>(rbp);
-            if (new_rbp <= rbp)
-                break;
-            rbp = new_rbp;
+    if (ctx.rsp >= bottom && ctx.rsp <= top) {
+        stack[depth ++] = deref_ptr<void*>(ctx.rsp);
+
+        // Check whether rbp lies in stack range during backtracing.
+        // This could be wrong if the compiler decides to use rbp as a general
+        // register for optimization and rbp happens to store a pointer inside the
+        // stack
+        if (ctx.rbp > ctx.rsp) {
+            auto rbp = ctx.rbp;
+            while (rbp < top && depth < MAX_DEPTH) {
+                stack[depth ++] = deref_ptr<void*>(rbp + sizeof(void*));
+                auto new_rbp = deref_ptr<uintptr_t>(rbp);
+                if (new_rbp <= rbp)
+                    break;
+                rbp = new_rbp;
+            }
         }
     }
 
