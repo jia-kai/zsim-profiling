@@ -160,7 +160,6 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     if (!prevBbl) {
         // This is the 1st BBL since scheduled, nothing to simulate
         prevBbl = bblInfo;
-        prevBblAddr = bblAddr;
         // Kill lingering ops from previous BBL
         loads = stores = 0;
         return;
@@ -171,7 +170,6 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     uint32_t bblInstrs = prevBbl->instrs;
     DynBbl* bbl = &(prevBbl->oooBbl[0]);
     prevBbl = bblInfo;
-    prevBblAddr = bblAddr;
 
     uint32_t loadIdx = 0;
     uint32_t storeIdx = 0;
@@ -505,16 +503,22 @@ void OOOCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 void OOOCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
     auto startCycle = core->curCycle;
+    auto prevBblAddr = core->prevBblAddr;
+    auto prevBbl = core->prevBbl;
     core->bbl(bblAddr, bblInfo);
+    core->prevBblAddr = bblAddr;
 
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    GlobSimInfo::StackContext stackCtx = core->prevStackCtx;
+    core->prevStackCtx = zinfo->stackCtxOnFuncEntry[tid];
 
     while (core->curCycle > core->phaseEndCycle) {
 
-        appprof_on_core_phase_end(tid,
-                AppProfContext{stackCtx.rbp, stackCtx.rsp,
-                    core->prevBblAddr, core->prevBbl->bytes,
+        if (prevBbl) {
+            appprof_on_core_phase_end(tid,
+                    AppProfContext{stackCtx.rbp, stackCtx.rsp,
+                    prevBblAddr, prevBbl->bytes,
                     startCycle, core->phaseEndCycle, core->curCycle});
+        }
 
         core->phaseEndCycle += zinfo->phaseLength;
 

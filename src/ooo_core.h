@@ -34,6 +34,7 @@
 #include "memory_hierarchy.h"
 #include "ooo_core_recorder.h"
 #include "pad.h"
+#include "zsim.h"
 
 // Uncomment to enable stall stats
 // #define OOO_STALL_STATS
@@ -369,7 +370,8 @@ class OOOCore : public Core {
         uint64_t regScoreboard[MAX_REGISTERS]; //contains timestamp of next issue cycles where each reg can be sourced
 
         BblInfo* prevBbl;
-        ADDRINT prevBblAddr;
+        ADDRINT prevBblAddr = 0;
+        GlobSimInfo::StackContext prevStackCtx;
 
         //Record load and store addresses
         Address loadAddrs[256];
