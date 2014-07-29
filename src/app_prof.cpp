@@ -25,10 +25,8 @@
 #include "app_prof.h"
 #include "log.h"
 #include "zsim.h"
+#include "debug.h"
 #include "gperftools/profiledata.h"
-
-#include <sys/time.h>
-#include <sys/resource.h>
 
 namespace gprof {
 
@@ -53,12 +51,6 @@ namespace gperftools {
     lock_t profile_data_lock;
     static ProfileData profile_data;
     static int sample_phase, cur_phase;
-    static uintptr_t stack_size;
-
-    template<typename T>
-    static T deref_ptr(uintptr_t ptr) {
-        return reinterpret_cast<T>(*reinterpret_cast<uintptr_t*>(ptr));
-    };
 
     static inline void on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
     static void init();
@@ -133,10 +125,6 @@ void gperftools::init() {
     opt.set_frequency((long long)zinfo->freqMHz * 1000000 / (
                 zinfo->phaseLength * sample_phase));
     profile_data.Start(zinfo->gperftoolsOutputName, opt);
-
-    struct rlimit rlim;
-    getrlimit(RLIMIT_STACK, &rlim);
-    stack_size = rlim.rlim_cur;
 }
 
 void gperftools::fini() {
@@ -156,28 +144,9 @@ void gperftools::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
     constexpr int MAX_DEPTH = ProfileData::kMaxStackDepth;
     void *stack[MAX_DEPTH];
     stack[0] = reinterpret_cast<void*>(ctx.pc);
-    int depth = 1;
-    auto top = zinfo->stackCtxOnFuncEntry[tid].stack_top,
-         bottom = top - stack_size;
-
-    if (ctx.rsp >= bottom && ctx.rsp <= top) {
-        stack[depth ++] = deref_ptr<void*>(ctx.rsp);
-
-        // Check whether rbp lies in stack range during backtracing.
-        // This could be wrong if the compiler decides to use rbp as a general
-        // register for optimization and rbp happens to store a pointer inside the
-        // stack
-        if (ctx.rbp > ctx.rsp) {
-            auto rbp = ctx.rbp;
-            while (rbp < top && depth < MAX_DEPTH) {
-                stack[depth ++] = deref_ptr<void*>(rbp + sizeof(void*));
-                auto new_rbp = deref_ptr<uintptr_t>(rbp);
-                if (new_rbp <= rbp)
-                    break;
-                rbp = new_rbp;
-            }
-        }
-    }
+    int depth = 1 + get_app_backtrace(ctx.rbp, ctx.rsp,
+            zinfo->stackCtxOnFuncEntry[tid].stack_top,
+            stack + 1, MAX_DEPTH - 1);
 
     futex_lock(&profile_data_lock);
     profile_data.Add(depth, stack);

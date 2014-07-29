@@ -172,7 +172,7 @@ struct GlobSimInfo {
     volatile bool externalTermPending;
 
     struct StackContext {
-        uintptr_t stack_top, rbp, rsp;
+        uintptr_t stack_top, rbp, rsp, cur_bbl_addr;
     };
 
     const char* gperftoolsOutputName;   // NULL if profiling not enabled

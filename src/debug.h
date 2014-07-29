@@ -26,6 +26,8 @@
 #ifndef DEBUG_H_
 #define DEBUG_H_
 
+#include <cstdint>
+
 //This header has common debugging datastructure defs.
 
 /* Describes the addresses at which libzsim.so is loaded. GDB needs this. */
@@ -34,5 +36,16 @@ struct LibInfo {
     void* bssAddr;
     void* dataAddr;
 };
+
+/*!
+ * extract backtrace in the program being simulated
+ */
+int get_app_backtrace(uintptr_t rbp, uintptr_t rsp, uintptr_t top,
+        void **stack, int max_depth);
+
+/*!
+ * resolve symbols and print backtrace to stderr
+ */
+void print_backtrace(const void * const *stack, int depth);
 
 #endif  // DEBUG_H_

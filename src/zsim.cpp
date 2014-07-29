@@ -126,6 +126,18 @@ static inline void setCid(uint32_t tid, uint32_t cid) {
     cores[tid] = zinfo->cores[cid];
 }
 
+static void printAppBacktrace(int tid) {
+    constexpr int MAX_DEPTH = 64;
+    void *stack[MAX_DEPTH];
+    const auto &sctx = zinfo->stackCtxOnFuncEntry[tid];
+    stack[0] = reinterpret_cast<void*>(sctx.cur_bbl_addr);
+    int depth = 1 + get_app_backtrace(sctx.rbp, sctx.rsp, sctx.stack_top,
+            stack + 1, MAX_DEPTH - 1);
+    fprintf(stderr, "%s[%d] backtrace of simulated prog: frames=%d\n",
+            logHeader, tid, depth);
+    print_backtrace(stack, depth);
+}
+
 uint32_t getCid(uint32_t tid) {
     //assert(tid < MAX_THREADS); //these assertions are fine, but getCid is called everywhere, so they are expensive!
     uint32_t cid = cids[tid];
@@ -173,9 +185,11 @@ VOID PIN_FAST_ANALYSIS_CALL IndirectStoreSingle(THREADID tid, ADDRINT addr) {
 }
 
 VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo, ADDRINT rbp, ADDRINT rsp) {
+    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    stackCtx.cur_bbl_addr = bblAddr;
     if (rbp) {
-        zinfo->stackCtxOnFuncEntry[tid].rbp = rbp;
-        zinfo->stackCtxOnFuncEntry[tid].rsp = rsp;
+        stackCtx.rbp = rbp;
+        stackCtx.rsp = rsp;
     }
     fPtrs[tid].bblPtr(tid, bblAddr, bblInfo);
 }
@@ -1029,6 +1043,7 @@ VOID ContextChange(THREADID tid, CONTEXT_CHANGE_REASON reason, const CONTEXT* fr
 
     if (reason == CONTEXT_CHANGE_REASON_FATALSIGNAL) {
         info("[%d] Fatal signal caught, finishing", tid);
+        printAppBacktrace(tid);
         zinfo->sched->queueProcessCleanup(procIdx, getpid()); //the scheduler watchdog will remove all our state when we are really dead
         SimEnd();
     }
@@ -1437,40 +1452,13 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
         fprintf(stderr, "%s[%d]  Caused by invalid %saccess to address 0x%lx\n", logHeader, tid, faultyAccessStr, faultyAccessAddr);
     }
 
-    void* array[40];
-    size_t size = backtrace(array, 40);
-    char** strings = backtrace_symbols(array, size);
-    fprintf(stderr, "%s[%d] Backtrace (%ld/%d max frames)\n", logHeader, tid, size, 40);
-    for (uint32_t i = 0; i < size; i++) {
-        //For libzsim.so addresses, call addr2line to get symbol info (can't use -rdynamic on libzsim.so because of Pin's linker script)
-        //NOTE: May be system-dependent, may not handle malformed strings well. We're going to die anyway, so in for a penny, in for a pound...
-        std::string s = strings[i];
-        uint32_t lp = s.find_first_of("(");
-        uint32_t cp = s.find_first_of(")");
-        std::string fname = s.substr(0, lp);
-        std::string faddr = s.substr(lp+1, cp-(lp+1));
-        if (fname.find("libzsim.so") != std::string::npos) {
-            std::string cmd = "addr2line -f -C -e " + fname + " " + faddr;
-            FILE* f = popen(cmd.c_str(), "r");
-            if (f) {
-                char buf[1024];
-                std::string func, loc;
-                func = fgets(buf, 1024, f); //first line is function name
-                loc = fgets(buf, 1024, f); //second is location
-                //Remove line breaks
-                func = func.substr(0, func.size()-1);
-                loc = loc.substr(0, loc.size()-1);
+    constexpr int MAX_DEPTH = 64;
+    void *stack[MAX_DEPTH];
+    int depth = backtrace(stack, MAX_DEPTH);
+    fprintf(stderr, "%s[%d] backtrace of pin/zsim:\n", logHeader, tid);
+    print_backtrace(stack, depth);
 
-                int status = pclose(f);
-                if (status == 0) {
-                    s = loc + " / " + func;
-                }
-            }
-        }
-
-        fprintf(stderr, "%s[%d]  %s\n", logHeader, tid, s.c_str());
-    }
-    fflush(stderr);
+    printAppBacktrace(tid);
 
     return EHR_CONTINUE_SEARCH; //we never solve anything at all :P
 }
