@@ -174,7 +174,7 @@ void AppProfiler::do_update(int tid, uint64_t cur_cycle) {
             next_cycle += sample_nr_cycle;
         }
     } else {
-        assert(gprof::samples)
+        assert(gprof::samples);
         while (next_cycle < cur_cycle) {
             auto addr = ctx.m_cur_bbl->addr +
                 ctx.m_cur_bbl->bytes * (next_cycle - m_bbl_start_cycle) / bbl_nr_cycle;
