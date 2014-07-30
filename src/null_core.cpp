@@ -44,7 +44,7 @@ uint64_t NullCore::getPhaseCycles() const {
     return curCycle - zinfo->globPhaseCycles;
 }
 
-void NullCore::bbl(BblInfo* bblInfo) {
+void NullCore::bbl(const BblInfo* bblInfo) {
     instrs += bblInfo->instrs;
     curCycle += bblInfo->instrs;
 }
@@ -67,9 +67,12 @@ void NullCore::StoreFunc(THREADID tid, ADDRINT addr) {}
 void NullCore::PredLoadFunc(THREADID tid, ADDRINT addr, BOOL pred) {}
 void NullCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {}
 
-void NullCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+void NullCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     NullCore* core = static_cast<NullCore*>(cores[tid]);
     core->bbl(bblInfo);
+
+    zinfo->stackCtxOnBBLEntry[tid].update(bblInfo);
+    core->appProfiler.update(tid, core->curCycle);
 
     while (unlikely(core->curCycle > core->phaseEndCycle)) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);

@@ -23,14 +23,19 @@
  */
 
 #include "app_prof.h"
-#include "log.h"
-#include "zsim.h"
 #include "debug.h"
+#include "zsim.h"
 #include "gperftools/profiledata.h"
 
-namespace gprof {
+static int get_profile_freq() {
+    return zinfo->freqMHz * 1000000ll / zinfo->appProfConfig.sampleCycles;
+}
 
-    constexpr int PROF_FREQ = 1000;
+constexpr int PROFILE_ENABLE_MASK_GPROF = 1, PROFILE_ENABLE_MASK_GPERFTOOLS = 2;
+uint64_t AppProfiler::sample_nr_cycle;
+int AppProfiler::enabled;
+
+namespace gprof {
     /*
      * profil_count and related are copied from glibc
      */
@@ -38,23 +43,24 @@ namespace gprof {
     static size_t nsamples;
     static size_t pc_offset;
     static u_int pc_scale;
-    static int prof_trigger_phase;
 
     static void instrument_img(IMG img);
-    static inline void profil_count(size_t pc);
     static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale);
-    static int rep_profile_frequency();
-    static inline void on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
+    static inline void update(size_t pc);
 }
 
 namespace gperftools {
+    constexpr size_t MAX_DEPTH = ProfileData::kMaxStackDepth;
     lock_t profile_data_lock;
     static ProfileData profile_data;
-    static int sample_phase, cur_phase;
 
-    static inline void on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
     static void init();
     static void fini();
+    static inline void update(const void * const * stack, int depth) {
+        futex_lock(&profile_data_lock);
+        profile_data.Add(depth, stack);
+        futex_unlock(&profile_data_lock);
+    }
 };
 
 
@@ -69,11 +75,11 @@ void gprof::instrument_img(IMG img) {
         info("replace profil in %s", IMG_Name(img).c_str());
         rtn = RTN_FindByName(img, "__profile_frequency");
         assert(rtn != RTN_Invalid());
-        RTN_Replace(rtn, (AFUNPTR)rep_profile_frequency);
+        RTN_Replace(rtn, (AFUNPTR)get_profile_freq);
     }
 }
 
-void gprof::profil_count(size_t pc) {
+void gprof::update(size_t pc) {
     size_t i = (pc - pc_offset) / 2;
     if (sizeof (unsigned long long int) > sizeof (size_t))
         i = (unsigned long long int) i * pc_scale / 65536;
@@ -86,75 +92,49 @@ void gprof::profil_count(size_t pc) {
 
 
 int gprof::rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale) {
+    warn("profil called, sample_buffer=%p", sample_buffer);
+    samples = sample_buffer;
     if (!sample_buffer) {
-        samples = nullptr;
-        warn("profiling disabled");
+        AppProfiler::enabled = 0;
         return 0;
     }
-    samples = sample_buffer;
+    assert_msg(!AppProfiler::enabled,
+            "another profiler other than gprof has been enabled");
+    AppProfiler::enabled = PROFILE_ENABLE_MASK_GPROF;
     nsamples = size / sizeof *samples;
     pc_offset = offset;
     pc_scale = scale;
-    prof_trigger_phase = (long long)zinfo->freqMHz * 1000000 /
-        ((long long)zinfo->phaseLength * PROF_FREQ);
-    warn("profiling enabled, prof_trigger_phase=%d", prof_trigger_phase);
     return 0;
 }
 
-int gprof::rep_profile_frequency() {
-    return PROF_FREQ;
-}
-
-void gprof::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
-    static int nr_phase;
-    if (__sync_add_and_fetch(&nr_phase, 1) == prof_trigger_phase) {
-        __sync_sub_and_fetch(&nr_phase, prof_trigger_phase);
-        profil_count(ctx.pc);
-    }
-}
 /* ===================== gprof ends =============================== */
 
 
 /* ===================== gperftools begins =============================== */
 void gperftools::init() {
-    if (!zinfo->gperftoolsOutputName)
+    const char* out_name = zinfo->appProfConfig.gperftoolsOutputName;
+    if (!out_name)
         return;
-    sample_phase = zinfo->gperftoolsSamplePhase;
+    assert_msg(!AppProfiler::enabled,
+            "another profiler other than gperftools has been enabled");
+    warn("enabled gperftools profiling, output: %s", out_name);
+    AppProfiler::enabled = PROFILE_ENABLE_MASK_GPERFTOOLS;
     futex_init(&profile_data_lock);
     ProfileData::Options opt;
-    opt.set_frequency((long long)zinfo->freqMHz * 1000000 / (
-                zinfo->phaseLength * sample_phase));
-    profile_data.Start(zinfo->gperftoolsOutputName, opt);
+    opt.set_frequency(get_profile_freq());
+    profile_data.Start(out_name, opt);
 }
 
 void gperftools::fini() {
-    if (!zinfo->gperftoolsOutputName)
+    if (!zinfo->appProfConfig.gperftoolsOutputName)
         return;
     profile_data.Stop();
 }
 
-void gperftools::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
-    if (sample_phase > 1) {
-        if (__sync_add_and_fetch(&cur_phase, 1) != sample_phase)
-            return;
-
-        __sync_fetch_and_sub(&cur_phase, sample_phase);
-    }
-
-    constexpr int MAX_DEPTH = ProfileData::kMaxStackDepth;
-    void *stack[MAX_DEPTH];
-    stack[0] = reinterpret_cast<void*>(ctx.pc);
-    int depth = 1 + get_app_backtrace(ctx.rbp, ctx.rsp,
-            zinfo->stackCtxOnFuncEntry[tid].stack_top,
-            stack + 1, MAX_DEPTH - 1);
-
-    futex_lock(&profile_data_lock);
-    profile_data.Add(depth, stack);
-    futex_unlock(&profile_data_lock);
-}
 /* ===================== gperftools ends =============================== */
 
 void appprof_init() {
+    AppProfiler::sample_nr_cycle = zinfo->appProfConfig.sampleCycles;
     gperftools::init();
 }
 
@@ -166,9 +146,61 @@ void appprof_instrument_img(IMG img) {
     gprof::instrument_img(img);
 }
 
-void appprof_on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
-    if (gprof::samples)
-        gprof::on_core_phase_end(tid, ctx);
-    if (zinfo->gperftoolsOutputName)
-        gperftools::on_core_phase_end(tid, ctx);
+void AppProfiler::do_update(int tid, uint64_t cur_cycle) {
+    uint64_t next_cycle = m_prev_cycle + sample_nr_cycle;
+    assert_msg(next_cycle >= m_bbl_start_cycle,
+            "bad cycle: prev=%zd next=%zd bbl=[%zx,%zd]",
+            m_prev_cycle, next_cycle, m_bbl_start_cycle, cur_cycle);
+
+    // calculate PC inside this bbl under assumption that each instr takes same
+    // time and has same length
+
+    auto bbl_nr_cycle = cur_cycle - m_bbl_start_cycle;
+    auto &&ctx = zinfo->stackCtxOnBBLEntry[tid];
+    if (enabled == PROFILE_ENABLE_MASK_GPERFTOOLS) {
+        auto &&buf = m_stack_buf;
+        buf.clear();
+        buf.push_back(0);
+        for (auto i = ctx.m_backtrace.crbegin();
+                i != ctx.m_backtrace.crend() && buf.size() < gperftools::MAX_DEPTH;
+                i ++)
+            buf.push_back(reinterpret_cast<void*>(*i));
+
+        while (next_cycle < cur_cycle) {
+            auto addr = ctx.m_cur_bbl->addr +
+                ctx.m_cur_bbl->bytes * (next_cycle - m_bbl_start_cycle) / bbl_nr_cycle;
+            buf[0] = reinterpret_cast<void*>(addr);
+            gperftools::update(buf.data(), buf.size());
+            next_cycle += sample_nr_cycle;
+        }
+    } else {
+        assert(gprof::samples)
+        while (next_cycle < cur_cycle) {
+            auto addr = ctx.m_cur_bbl->addr +
+                ctx.m_cur_bbl->bytes * (next_cycle - m_bbl_start_cycle) / bbl_nr_cycle;
+            gprof::update(addr);
+            next_cycle += sample_nr_cycle;
+        }
+    }
+    m_prev_cycle = next_cycle - sample_nr_cycle;
 }
+
+struct MemmapEntry {
+    uintptr_t low, high;
+    std::string file;
+
+    MemmapEntry(uint64_t low_, uint64_t high_, const char *file_):
+        low(low_), high(high_), file(file_)
+    {}
+};
+
+void StackContext::print() const {
+    std::vector<void*> bp;
+    bp.push_back(reinterpret_cast<void*>(m_cur_bbl->addr));
+    for (auto i = m_backtrace.crbegin(); i != m_backtrace.crend(); i ++)
+        bp.push_back(reinterpret_cast<void*>(*i));
+    print_backtrace(bp.data(), bp.size());
+}
+
+BblInfo StackContext::m_bbl_sentinel;
+

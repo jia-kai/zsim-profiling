@@ -156,7 +156,7 @@ void OOOCore::branch(Address pc, bool taken, Address takenNpc, Address notTakenN
     branchNotTakenNpc = notTakenNpc;
 }
 
-inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
+inline void OOOCore::bbl(const BblInfo* bblInfo) {
     if (!prevBbl) {
         // This is the 1st BBL since scheduled, nothing to simulate
         prevBbl = bblInfo;
@@ -168,7 +168,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     /* Simulate execution of previous BBL */
 
     uint32_t bblInstrs = prevBbl->instrs;
-    DynBbl* bbl = &(prevBbl->oooBbl[0]);
+    const DynBbl* bbl = &(prevBbl->oooBbl[0]);
     prevBbl = bblInfo;
 
     uint32_t loadIdx = 0;
@@ -179,7 +179,7 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
 
     // Run dispatch/IW
     for (uint32_t i = 0; i < bbl->uops; i++) {
-        DynUop* uop = &(bbl->uop[i]);
+        const DynUop* uop = &(bbl->uop[i]);
         
         // Decode stalls
         uint32_t decDiff = uop->decCycle - prevDecCycle;
@@ -420,8 +420,8 @@ inline void OOOCore::bbl(Address bblAddr, BblInfo* bblInfo) {
     branchPc = 0;  // clear for next BBL
 
     // Simulate current bbl ifetch
-    Address endAddr = bblAddr + bblInfo->bytes;
-    for (Address fetchAddr = bblAddr; fetchAddr < endAddr; fetchAddr += lineSize) {
+    Address endAddr = bblInfo->addr + bblInfo->bytes;
+    for (Address fetchAddr = bblInfo->addr; fetchAddr < endAddr; fetchAddr += lineSize) {
         // The Nehalem frontend fetches instructions in 16-byte-wide accesses.
         // Do not model fetch throughput limit here, decoder-generated stalls already include it
         // We always call fetches with curCycle to avoid upsetting the weave
@@ -500,25 +500,17 @@ void OOOCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
     else core->predFalseMemOp();
 }
 
-void OOOCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+void OOOCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
-    auto startCycle = core->curCycle;
-    auto prevBblAddr = core->prevBblAddr;
-    auto prevBbl = core->prevBbl;
-    core->bbl(bblAddr, bblInfo);
-    core->prevBblAddr = bblAddr;
+    const BblInfo *prevBbl = core->prevBbl;
+    core->bbl(bblInfo);
 
-    GlobSimInfo::StackContext stackCtx = core->prevStackCtx;
-    core->prevStackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    if (likely(prevBbl != nullptr)) {
+        zinfo->stackCtxOnBBLEntry[tid].update(prevBbl);
+        core->appProfiler.update(tid, core->curCycle);
+    }
 
     while (core->curCycle > core->phaseEndCycle) {
-
-        if (prevBbl) {
-            appprof_on_core_phase_end(tid,
-                    AppProfContext{stackCtx.rbp, stackCtx.rsp,
-                    prevBblAddr, prevBbl->bytes,
-                    startCycle, core->phaseEndCycle, core->curCycle});
-        }
 
         core->phaseEndCycle += zinfo->phaseLength;
 

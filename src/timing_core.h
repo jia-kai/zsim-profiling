@@ -31,6 +31,7 @@
 #include "event_recorder.h"
 #include "memory_hierarchy.h"
 #include "pad.h"
+#include "app_prof.h"
 
 class FilterCache;
 
@@ -45,6 +46,7 @@ class TimingCore : public Core {
         uint64_t phaseEndCycle; //phase 1 end clock
 
         CoreRecorder cRec;
+        AppProfiler appProfiler;
 
     public:
         TimingCore(FilterCache* _l1i, FilterCache* _l1d, uint32_t domain, g_string& _name);
@@ -68,12 +70,12 @@ class TimingCore : public Core {
     private:
         inline void loadAndRecord(Address addr);
         inline void storeAndRecord(Address addr);
-        inline void bblAndRecord(Address bblAddr, BblInfo* bblInstrs);
+        inline void bblAndRecord(const BblInfo* bblInstrs);
         inline void record(uint64_t startCycle);
 
         static void LoadAndRecordFunc(THREADID tid, ADDRINT addr);
         static void StoreAndRecordFunc(THREADID tid, ADDRINT addr);
-        static void BblAndRecordFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo);
+        static void BblAndRecordFunc(THREADID tid, const BblInfo* bblInfo);
         static void PredLoadAndRecordFunc(THREADID tid, ADDRINT addr, BOOL pred);
         static void PredStoreAndRecordFunc(THREADID tid, ADDRINT addr, BOOL pred);
 

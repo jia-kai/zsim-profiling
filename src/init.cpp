@@ -693,6 +693,9 @@ static void InitSystem(Config& config) {
     for (pair<string, CacheGroup*> kv : cMap) delete kv.second;
     cMap.clear();
 
+
+    zinfo->stackCtxOnBBLEntry = new StackContext[MAX_THREADS];
+
     info("Initialized system");
 }
 
@@ -778,8 +781,6 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
 
     zinfo = gm_calloc<GlobSimInfo>();
     zinfo->outputDir = gm_strdup(outputDir);
-    zinfo->gperftoolsOutputName = config.get<const char*>("sys.gperftools.outputName", nullptr);
-    zinfo->gperftoolsSamplePhase = config.get<uint32_t>("sys.gperftools.samplePhase", 1);
 
     //Debugging
     //NOTE: This should be as early as possible, so that we can attach to the debugger before initialization.
@@ -909,6 +910,10 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
     config.get<uint32_t>("sim.gmMBytes", (1 << 10));
     if (!zinfo->attachDebugger) config.get<bool>("sim.deadlockDetection", true);
     config.get<bool>("sim.aslr", false);
+
+    // profiling
+    zinfo->appProfConfig.sampleCycles = config.get<uint32_t>("sys.profiling.sampleCycles", 10000);
+    zinfo->appProfConfig.gperftoolsOutputName = config.get<const char*>("sys.profiling.gperftoolsOutputName", nullptr);
 
     //Write config out
     bool strictConfig = config.get<bool>("sim.strictConfig", true); //if true, panic on unused variables

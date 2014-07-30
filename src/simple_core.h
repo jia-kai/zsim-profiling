@@ -31,6 +31,7 @@
 #include "core.h"
 #include "memory_hierarchy.h"
 #include "pad.h"
+#include "app_prof.h"
 
 class FilterCache;
 
@@ -43,6 +44,8 @@ class SimpleCore : public Core {
         uint64_t curCycle;
         uint64_t phaseEndCycle; //next stopping point
         uint64_t haltedCycles;
+
+        AppProfiler appProfiler;
 
     public:
         SimpleCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name);
@@ -61,11 +64,11 @@ class SimpleCore : public Core {
         //Simulation functions
         inline void load(Address addr);
         inline void store(Address addr);
-        inline void bbl(Address bblAddr, BblInfo* bblInstrs);
+        inline void bbl(const BblInfo* bblInfo);
 
         static void LoadFunc(THREADID tid, ADDRINT addr);
         static void StoreFunc(THREADID tid, ADDRINT addr);
-        static void BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo);
+        static void BblFunc(THREADID tid, const BblInfo* bblInfo);
         static void PredLoadFunc(THREADID tid, ADDRINT addr, BOOL pred);
         static void PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred);
 

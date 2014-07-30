@@ -90,12 +90,12 @@ void TimingCore::storeAndRecord(Address addr) {
     cRec.record(startCycle);
 }
 
-void TimingCore::bblAndRecord(Address bblAddr, BblInfo* bblInfo) {
+void TimingCore::bblAndRecord(const BblInfo* bblInfo) {
     instrs += bblInfo->instrs;
     curCycle += bblInfo->instrs;
 
-    Address endBblAddr = bblAddr + bblInfo->bytes;
-    for (Address fetchAddr = bblAddr; fetchAddr < endBblAddr; fetchAddr+=(1 << lineBits)) {
+    Address endBblAddr = bblInfo->addr + bblInfo->bytes;
+    for (Address fetchAddr = bblInfo->addr; fetchAddr < endBblAddr; fetchAddr+=(1 << lineBits)) {
         uint64_t startCycle = curCycle;
         curCycle = l1i->load(fetchAddr, curCycle);
         cRec.record(startCycle);
@@ -115,19 +115,13 @@ void TimingCore::StoreAndRecordFunc(THREADID tid, ADDRINT addr) {
     static_cast<TimingCore*>(cores[tid])->storeAndRecord(addr);
 }
 
-void TimingCore::BblAndRecordFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+void TimingCore::BblAndRecordFunc(THREADID tid, const BblInfo* bblInfo) {
     TimingCore* core = static_cast<TimingCore*>(cores[tid]);
-    auto startCycle = core->curCycle;
-    core->bblAndRecord(bblAddr, bblInfo);
-
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    core->bblAndRecord(bblInfo);
+    zinfo->stackCtxOnBBLEntry[tid].update(bblInfo);
+    core->appProfiler.update(tid, core->curCycle);
 
     while (core->curCycle > core->phaseEndCycle) {
-
-        appprof_on_core_phase_end(tid,
-                AppProfContext{stackCtx.rbp, stackCtx.rsp,
-                    bblAddr, bblInfo->bytes,
-                    startCycle, std::max(startCycle, core->phaseEndCycle), core->curCycle});
 
         core->phaseEndCycle += zinfo->phaseLength;
         uint32_t cid = getCid(tid);

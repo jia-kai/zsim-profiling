@@ -25,35 +25,78 @@
 #pragma once
 
 /*
- * profile the application being simulated
+ * profile the program being simulated
  *
  * the program is sampled on phase end, and statistics are fed to gperftools
  * (https://code.google.com/p/gperftools/) for further processing
  */
 
+#include "log.h"
+#include "core.h"
+
 #include <pin.H>
 
-#include "log.h"
+#include <cstdint>
+#include <vector>
 
-struct AppProfContext {
-    uintptr_t rbp, rsp, pc;
+class StackContext {
+    static BblInfo m_bbl_sentinel;
+    const BblInfo *m_cur_bbl = &m_bbl_sentinel;
 
-    AppProfContext(uintptr_t rbp_, uintptr_t rsp_,
-            uintptr_t bbl_start, uintptr_t bbl_length,
-            uint64_t start_cycle, uint64_t cur_cycle, uint64_t end_cycle):
-        rbp(rbp_), rsp(rsp_),
+    // pc of call instr of outer frames
+    std::vector<uintptr_t> m_backtrace;
 
-        // assume all instructions have same length to calc pc
-        pc(bbl_start + bbl_length * (cur_cycle - start_cycle) / (end_cycle - start_cycle))
-    {
-        assert_msg(cur_cycle >= start_cycle && cur_cycle <= end_cycle,
-                "phase=%zd-%zd cur_cycle=%zx", start_cycle, end_cycle, cur_cycle);
-    }
+    friend class AppProfiler;
+
+    public:
+
+        void update(const BblInfo *bbl) {
+            using T = BblInfo::Type;
+            if (unlikely(m_cur_bbl->type == T::END_WITH_CALL))
+                m_backtrace.push_back(m_cur_bbl->addr + m_cur_bbl->bytes - 1);
+            else if (unlikely(m_cur_bbl->type == T::END_WITH_RET))
+                m_backtrace.pop_back();
+            m_cur_bbl = bbl;
+        };
+
+        int depth() const {
+            return m_backtrace.size() + 1;
+        }
+
+        void print() const;
 };
+
 
 void appprof_init();
 void appprof_fini();
 
 void appprof_instrument_img(IMG img);
 
-void appprof_on_core_phase_end(uint32_t tid, const AppProfContext &ctx);
+/*!
+ * application profiler per core
+ */
+class AppProfiler {
+    uint64_t m_prev_cycle = 0, m_bbl_start_cycle = 0;
+    std::vector<void*> m_stack_buf;
+    static uint64_t sample_nr_cycle;
+    friend void appprof_init();
+
+    void do_update(int tid, uint64_t cur_cycle);
+
+    public:
+        static int enabled;
+
+        // must be called after simulating each bbl
+        void update(int tid, uint64_t cur_cycle) {
+            if (enabled) {
+                if (cur_cycle - m_prev_cycle > sample_nr_cycle)
+                    do_update(tid, cur_cycle);
+                m_bbl_start_cycle = cur_cycle;
+            }
+        }
+};
+
+/*!
+ * resolve symbols and print backtrace to stderr
+ */
+void print_backtrace(const StackContext &ctx);

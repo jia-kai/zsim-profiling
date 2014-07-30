@@ -1445,6 +1445,17 @@ BblInfo* Decoder::decodeBbl(BBL bbl, bool oooDecoding) {
     //Initialize generic part
     bblInfo->instrs = instrs;
     bblInfo->bytes = bytes;
+    bblInfo->addr = BBL_Address(bbl);
+    {
+        using T = BblInfo::Type;
+        INS last_ins = BBL_InsTail(bbl);
+        if (INS_IsRet(last_ins))
+            bblInfo->type = T::END_WITH_RET;
+        else if (INS_IsProcedureCall(last_ins))
+            bblInfo->type = T::END_WITH_CALL;
+        else
+            bblInfo->type = T::NORMAL;
+    }
 
     return bblInfo;
 }

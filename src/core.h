@@ -32,8 +32,13 @@
 #include "stats.h"
 
 struct BblInfo {
-    uint32_t instrs;
-    uint32_t bytes;
+    enum class Type {
+        NORMAL, END_WITH_CALL, END_WITH_RET
+    };
+    Type type = Type::NORMAL;
+    uint32_t instrs = 0;
+    uint32_t bytes = 0;
+    uint64_t addr = 0;
     DynBbl oooBbl[0]; //0 bytes, but will be 1-sized when we have an element (and that element has variable size as well)
 };
 
@@ -43,7 +48,7 @@ struct BblInfo {
 struct InstrFuncPtrs {  // NOLINT(whitespace)
     void (*loadPtr)(THREADID, ADDRINT);
     void (*storePtr)(THREADID, ADDRINT);
-    void (*bblPtr)(THREADID, ADDRINT, BblInfo*);
+    void (*bblPtr)(THREADID, const BblInfo*);
     void (*branchPtr)(THREADID, ADDRINT, BOOL, ADDRINT, ADDRINT);
     // Same as load/store functions, but last arg indicated whether op is executing
     void (*predLoadPtr)(THREADID, ADDRINT, BOOL);

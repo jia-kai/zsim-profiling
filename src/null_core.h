@@ -30,12 +30,15 @@
 
 #include "core.h"
 #include "pad.h"
+#include "app_prof.h"
 
 class NullCore : public Core {
     protected:
         uint64_t instrs;
         uint64_t curCycle;
         uint64_t phaseEndCycle; //next stopping point
+
+        AppProfiler appProfiler;
 
     public:
         explicit NullCore(g_string& _name);
@@ -51,11 +54,11 @@ class NullCore : public Core {
         InstrFuncPtrs GetFuncPtrs();
 
     protected:
-        inline void bbl(BblInfo* bblInstrs);
+        inline void bbl(const BblInfo* bblInstrs);
 
         static void LoadFunc(THREADID tid, ADDRINT addr);
         static void StoreFunc(THREADID tid, ADDRINT addr);
-        static void BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo);
+        static void BblFunc(THREADID tid, const BblInfo* bblInfo);
         static void PredLoadFunc(THREADID tid, ADDRINT addr, BOOL pred);
         static void PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred);
 

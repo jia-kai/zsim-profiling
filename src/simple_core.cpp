@@ -56,14 +56,14 @@ void SimpleCore::store(Address addr) {
     curCycle = l1d->store(addr, curCycle);
 }
 
-void SimpleCore::bbl(Address bblAddr, BblInfo* bblInfo) {
+void SimpleCore::bbl(const BblInfo* bblInfo) {
     //info("BBL %s %p", name.c_str(), bblInfo);
     //info("%d %d", bblInfo->instrs, bblInfo->bytes);
     instrs += bblInfo->instrs;
     curCycle += bblInfo->instrs;
 
-    Address endBblAddr = bblAddr + bblInfo->bytes;
-    for (Address fetchAddr = bblAddr; fetchAddr < endBblAddr; fetchAddr+=(1 << lineBits)) {
+    Address endBblAddr = bblInfo->addr + bblInfo->bytes;
+    for (Address fetchAddr = bblInfo->addr; fetchAddr < endBblAddr; fetchAddr+=(1 << lineBits)) {
         curCycle = l1i->load(fetchAddr, curCycle);
     }
 }
@@ -109,20 +109,14 @@ void SimpleCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
     if (pred) static_cast<SimpleCore*>(cores[tid])->store(addr);
 }
 
-void SimpleCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+void SimpleCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     SimpleCore* core = static_cast<SimpleCore*>(cores[tid]);
-    auto startCycle = core->curCycle;
-    core->bbl(bblAddr, bblInfo);
-
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    core->bbl(bblInfo);
+    zinfo->stackCtxOnBBLEntry[tid].update(bblInfo);
+    core->appProfiler.update(tid, core->curCycle);
 
     while (core->curCycle > core->phaseEndCycle) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
-
-        appprof_on_core_phase_end(tid,
-                AppProfContext{stackCtx.rbp, stackCtx.rsp,
-                    bblAddr, bblInfo->bytes,
-                    startCycle, std::max(startCycle, core->phaseEndCycle), core->curCycle});
 
         core->phaseEndCycle += zinfo->phaseLength;
 

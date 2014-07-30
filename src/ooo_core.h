@@ -35,6 +35,7 @@
 #include "ooo_core_recorder.h"
 #include "pad.h"
 #include "zsim.h"
+#include "app_prof.h"
 
 // Uncomment to enable stall stats
 // #define OOO_STALL_STATS
@@ -369,9 +370,7 @@ class OOOCore : public Core {
         uint64_t curCycle; //this model is issue-centric; curCycle refers to the current issue cycle
         uint64_t regScoreboard[MAX_REGISTERS]; //contains timestamp of next issue cycles where each reg can be sourced
 
-        BblInfo* prevBbl;
-        ADDRINT prevBblAddr = 0;
-        GlobSimInfo::StackContext prevStackCtx;
+        const BblInfo* prevBbl;
 
         //Record load and store addresses
         Address loadAddrs[256];
@@ -435,6 +434,7 @@ class OOOCore : public Core {
         FwdEntry fwdArray[FWD_ENTRIES];
 
         OOOCoreRecorder cRec;
+        AppProfiler appProfiler;
 
     public:
         OOOCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name);
@@ -477,13 +477,13 @@ class OOOCore : public Core {
 
         inline void branch(Address pc, bool taken, Address takenNpc, Address notTakenNpc);
 
-        inline void bbl(Address bblAddr, BblInfo* bblInfo);
+        inline void bbl(const BblInfo* bblInfo);
 
         static void LoadFunc(THREADID tid, ADDRINT addr);
         static void StoreFunc(THREADID tid, ADDRINT addr);
         static void PredLoadFunc(THREADID tid, ADDRINT addr, BOOL pred);
         static void PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred);
-        static void BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo);
+        static void BblFunc(THREADID tid, const BblInfo* bblInfo);
         static void BranchFunc(THREADID tid, ADDRINT pc, BOOL taken, ADDRINT takenNpc, ADDRINT notTakenNpc);
 } ATTR_LINE_ALIGNED;  // Take up an int number of cache lines
 

@@ -127,15 +127,10 @@ static inline void setCid(uint32_t tid, uint32_t cid) {
 }
 
 static void printAppBacktrace(int tid) {
-    constexpr int MAX_DEPTH = 64;
-    void *stack[MAX_DEPTH];
-    const auto &sctx = zinfo->stackCtxOnFuncEntry[tid];
-    stack[0] = reinterpret_cast<void*>(sctx.cur_bbl_addr);
-    int depth = 1 + get_app_backtrace(sctx.rbp, sctx.rsp, sctx.stack_top,
-            stack + 1, MAX_DEPTH - 1);
+    auto &&ctx = zinfo->stackCtxOnBBLEntry[tid];
     fprintf(stderr, "%s[%d] backtrace of simulated prog: frames=%d\n",
-            logHeader, tid, depth);
-    print_backtrace(stack, depth);
+            logHeader, tid, ctx.depth());
+    ctx.print();
 }
 
 uint32_t getCid(uint32_t tid) {
@@ -184,14 +179,8 @@ VOID PIN_FAST_ANALYSIS_CALL IndirectStoreSingle(THREADID tid, ADDRINT addr) {
     fPtrs[tid].storePtr(tid, addr);
 }
 
-VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo, ADDRINT rbp, ADDRINT rsp) {
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
-    stackCtx.cur_bbl_addr = bblAddr;
-    if (rbp) {
-        stackCtx.rbp = rbp;
-        stackCtx.rsp = rsp;
-    }
-    fPtrs[tid].bblPtr(tid, bblAddr, bblInfo);
+VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, const BblInfo* bblInfo) {
+    fPtrs[tid].bblPtr(tid, bblInfo);
 }
 
 VOID PIN_FAST_ANALYSIS_CALL IndirectRecordBranch(THREADID tid, ADDRINT branchPc, BOOL taken, ADDRINT takenNpc, ADDRINT notTakenNpc) {
@@ -234,9 +223,9 @@ VOID JoinAndStoreSingle(THREADID tid, ADDRINT addr) {
     fPtrs[tid].storePtr(tid, addr);
 }
 
-VOID JoinAndBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+VOID JoinAndBasicBlock(THREADID tid, const BblInfo* bblInfo) {
     Join(tid);
-    fPtrs[tid].bblPtr(tid, bblAddr, bblInfo);
+    fPtrs[tid].bblPtr(tid, bblInfo);
 }
 
 VOID JoinAndRecordBranch(THREADID tid, ADDRINT branchPc, BOOL taken, ADDRINT takenNpc, ADDRINT notTakenNpc) {
@@ -256,12 +245,12 @@ VOID JoinAndPredStoreSingle(THREADID tid, ADDRINT addr, BOOL pred) {
 
 // NOP variants: Do nothing
 VOID NOPLoadStoreSingle(THREADID tid, ADDRINT addr) {}
-VOID NOPBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {}
+VOID NOPBasicBlock(THREADID tid, const BblInfo* bblInfo) {}
 VOID NOPRecordBranch(THREADID tid, ADDRINT addr, BOOL taken, ADDRINT takenNpc, ADDRINT notTakenNpc) {}
 VOID NOPPredLoadStoreSingle(THREADID tid, ADDRINT addr, BOOL pred) {}
 
 // FF is basically NOP except for basic blocks
-VOID FFBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+VOID FFBasicBlock(THREADID tid, const BblInfo* bblInfo) {
     if (unlikely(!procTreeNode->isInFastForward())) {
         SimThreadStart(tid);
     }
@@ -354,7 +343,7 @@ VOID FFIAdvance() {
     }
 }
 
-VOID FFIBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+VOID FFIBasicBlock(THREADID tid, const BblInfo* bblInfo) {
     ffiInstrsDone += bblInfo->instrs;
     if (unlikely(ffiInstrsDone >= ffiInstrsLimit)) {
         FFIAdvance();
@@ -370,13 +359,13 @@ VOID FFIBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
 }
 
 // One-off, called after we go from NFF to FF
-VOID FFIEntryBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
+VOID FFIEntryBasicBlock(THREADID tid, const BblInfo* bblInfo) {
     ffiInstrsDone += *ffiFFStartInstrs - *ffiPrevFFStartInstrs; //add all instructions executed in the NFF phase
     FFIAdvance();
     assert(ffiNFF);
     ffiNFF = false;
     fPtrs[tid] = GetFFPtrs();
-    FFIBasicBlock(tid, bblAddr, bblInfo);
+    FFIBasicBlock(tid, bblInfo);
 }
 
 // Non-analysis pointer vars
@@ -631,32 +620,11 @@ VOID Trace(TRACE trace, VOID *v) {
         return;
 
     if (!procTreeNode->isInFastForward() || !zinfo->ffReinstrument) {
-        bool isFuncEntry = false;
-
-        {
-            RTN rtn = TRACE_Rtn(trace);
-            if (rtn != RTN_Invalid()) {
-                RTN_Open(rtn);
-                INS ins_rtn = RTN_InsHeadOnly(rtn),
-                    ins_trace = BBL_InsHead(TRACE_BblHead(trace));
-                if (ins_rtn != INS_Invalid() && ins_trace != INS_Invalid() &&
-                        INS_Address(ins_rtn) == INS_Address(ins_trace)) {
-                    isFuncEntry = true;
-                }
-                RTN_Close(rtn);
-            }
-        }
-
         // Visit every basic block in the trace
         for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
             BblInfo* bblInfo = Decoder::decodeBbl(bbl, zinfo->oooDecode);
-            if (isFuncEntry) {
-                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
-                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_REG_VALUE, REG_RBP, IARG_REG_VALUE, REG_RSP, IARG_END);
-            } else {
-                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
-                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_ADDRINT, 0, IARG_ADDRINT, 0, IARG_END);
-            }
+            BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
+                    IARG_THREAD_ID, IARG_PTR, bblInfo, IARG_END);
         }
     }
 
@@ -910,7 +878,6 @@ VOID ThreadStart(THREADID tid, CONTEXT *ctxt, INT32 flags, VOID *v) {
      * It's here and not in main() because that way the auxiliary threads can
      * start.
      */
-    zinfo->stackCtxOnFuncEntry[tid].stack_top = PIN_GetContextReg(ctxt, REG_RSP);
     if (procTreeNode->isInPause()) {
         futex_lock(&zinfo->pauseLocks[procIdx]);  // initialize
         info("Pausing until notified");
@@ -1436,13 +1403,26 @@ VOID FFThread(VOID* arg) {
 
 //Use unlocked output, who knows where this happens.
 static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_INFO *pExceptInfo, PHYSICAL_CONTEXT *pPhysCtxt, VOID *) {
+    static bool entered = false;
+
+    auto excCode = PIN_GetExceptionCode(pExceptInfo);
     fprintf(stderr, "%s[%d] Internal exception detected:\n", logHeader, tid);
-    fprintf(stderr, "%s[%d]  Code: %d\n", logHeader, tid, PIN_GetExceptionCode(pExceptInfo));
+    fprintf(stderr, "%s[%d]  Code: %d\n", logHeader, tid, excCode);
     fprintf(stderr, "%s[%d]  Address: 0x%lx\n", logHeader, tid, PIN_GetExceptionAddress(pExceptInfo));
     fprintf(stderr, "%s[%d]  Description: %s\n", logHeader, tid, PIN_ExceptionToString(pExceptInfo).c_str());
 
+    if (entered) {
+        // re-enter of exception handler, due to exception in this handler ...
+        warn("%s: exception occured inside exception handler, exit now",
+                __func__);
+        exit(EXIT_FAILURE);
+    }
+
+    entered = true;
+
     ADDRINT faultyAccessAddr;
-    if (PIN_GetFaultyAccessAddress(pExceptInfo, &faultyAccessAddr)) {
+    if (PIN_GetExceptionClass(excCode) == EXCEPTCLASS_ACCESS_FAULT &&
+            PIN_GetFaultyAccessAddress(pExceptInfo, &faultyAccessAddr)) {
         const char* faultyAccessStr = "";
         FAULTY_ACCESS_TYPE fat = PIN_GetFaultyAccessType(pExceptInfo);
         if (fat == FAULTY_ACCESS_READ) faultyAccessStr = "READ ";
@@ -1459,6 +1439,8 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
     print_backtrace(stack, depth);
 
     printAppBacktrace(tid);
+
+    entered = false;
 
     return EHR_CONTINUE_SEARCH; //we never solve anything at all :P
 }
