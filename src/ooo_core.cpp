@@ -509,7 +509,7 @@ void OOOCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     core->prevBblAddr = bblAddr;
 
     GlobSimInfo::StackContext stackCtx = core->prevStackCtx;
-    core->prevStackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    core->prevStackCtx = zinfo->stackCtxOnBBLEntry[tid];
 
     while (core->curCycle > core->phaseEndCycle) {
 

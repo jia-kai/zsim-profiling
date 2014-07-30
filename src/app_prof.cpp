@@ -143,10 +143,7 @@ void gperftools::on_core_phase_end(uint32_t tid, const AppProfContext &ctx) {
 
     constexpr int MAX_DEPTH = ProfileData::kMaxStackDepth;
     void *stack[MAX_DEPTH];
-    stack[0] = reinterpret_cast<void*>(ctx.pc);
-    int depth = 1 + get_app_backtrace(ctx.rbp, ctx.rsp,
-            zinfo->stackCtxOnFuncEntry[tid].stack_top,
-            stack + 1, MAX_DEPTH - 1);
+    int depth = get_app_backtrace(ctx.rbp, ctx.rsp, ctx.pc, stack, MAX_DEPTH);
 
     futex_lock(&profile_data_lock);
     profile_data.Add(depth, stack);

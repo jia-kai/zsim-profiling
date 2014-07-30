@@ -120,7 +120,7 @@ void TimingCore::BblAndRecordFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInf
     auto startCycle = core->curCycle;
     core->bblAndRecord(bblAddr, bblInfo);
 
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    auto &&stackCtx = zinfo->stackCtxOnBBLEntry[tid];
 
     while (core->curCycle > core->phaseEndCycle) {
 

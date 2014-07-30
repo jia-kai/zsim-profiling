@@ -23,7 +23,10 @@
  */
 
 #include "debug.h"
+#include "log.h"
 #include "gperftools/sysinfo.h"
+
+#include <libunwind.h>
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -47,35 +50,40 @@ static void __attribute__((constructor)) setup_stack_size() {
     stack_size = rlim.rlim_cur;
 }
 
-template<typename T>
-static T deref_ptr(uintptr_t ptr) {
-    return reinterpret_cast<T>(*reinterpret_cast<uintptr_t*>(ptr));
-};
 
-
-int get_app_backtrace(uintptr_t rbp, uintptr_t rsp, uintptr_t top,
+int get_app_backtrace(uintptr_t rbp, uintptr_t rsp, uintptr_t rip,
         void **stack, int max_depth) {
-    auto bottom = top - stack_size;
+    unw_context_t uc;
+    unw_cursor_t cursor;
+    memset(&uc, 0, sizeof(uc));
+    // unw_getcontext(&uc);
+    uc.uc_mcontext.gregs[REG_RSP] = rsp;
+    uc.uc_mcontext.gregs[REG_RBP] = rbp;
+    uc.uc_mcontext.gregs[REG_RIP] = rip;
+    unw_init_local(&cursor, &uc);
 
-    if (rsp < bottom || rsp > top)
-        return 0;
-
-    int depth = 1;
-    stack[0] = deref_ptr<void*>(rsp);
-
-    // Check whether rbp lies in stack range during backtracing.
-    // This could be wrong if the compiler decides to use rbp as a general
-    // register for optimization and rbp happens to store a pointer inside the
-    // stack
-    if (rbp > rsp) {
-        while (rbp < top && depth < max_depth) {
-            stack[depth ++] = deref_ptr<void*>(rbp + sizeof(void*));
-            auto new_rbp = deref_ptr<uintptr_t>(rbp);
-            if (new_rbp <= rbp)
-                break;
-            rbp = new_rbp;
-        }
+    int depth = 0, ret = -1;
+    stack[depth ++] = reinterpret_cast<void*>(rip);
+    long volatile *rbp_user = (long*)0x601278;
+    while (depth < max_depth && (ret = unw_step(&cursor)) > 0) {
+        unw_word_t ip;
+        unw_get_reg(&cursor, UNW_REG_IP, &ip);
+        stack[depth ++] = reinterpret_cast<void*>(ip);
     }
+
+    assert_msg(ret >= 0, "failed to backtrace: unw_step returned %d", ret);
+
+    static int cnt = 0;
+    if (cnt >= 300) {
+        printf("bp %d: ret=%d rbp=0x%zx rsp=0x%zx pc=0x%zx "
+                "user_rbp=0x%lx\n", cnt, ret,
+                rbp, rsp, rip, *rbp_user);
+        print_backtrace(stack, depth);
+        getchar();
+    }
+    cnt ++;
+
+
     return depth;
 }
 

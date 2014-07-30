@@ -111,18 +111,23 @@ void SimpleCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 
 void SimpleCore::BblFunc(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo) {
     SimpleCore* core = static_cast<SimpleCore*>(cores[tid]);
-    auto startCycle = core->curCycle;
     core->bbl(bblAddr, bblInfo);
 
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    auto &&stackCtx = zinfo->stackCtxOnBBLEntry[tid];
 
     while (core->curCycle > core->phaseEndCycle) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
 
+        /*
         appprof_on_core_phase_end(tid,
                 AppProfContext{stackCtx.rbp, stackCtx.rsp,
                     bblAddr, bblInfo->bytes,
                     startCycle, std::max(startCycle, core->phaseEndCycle), core->curCycle});
+                    */
+        appprof_on_core_phase_end(tid,
+                AppProfContext{stackCtx.rbp, stackCtx.rsp,
+                    bblAddr, 0,
+                    0, 0, 1});
 
         core->phaseEndCycle += zinfo->phaseLength;
 

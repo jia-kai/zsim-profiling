@@ -172,16 +172,15 @@ struct GlobSimInfo {
     volatile bool externalTermPending;
 
     struct StackContext {
-        uintptr_t stack_top, rbp, rsp, cur_bbl_addr;
+        uintptr_t rbp, rsp, cur_bbl_addr;
     };
 
     const char* gperftoolsOutputName;   // NULL if profiling not enabled
     int gperftoolsSamplePhase;  // number of phases for a sample
 
     // used for backtracing the program being simulated
-    // updated when entering a function except stack_top which is set when
-    // entering a thread
-    StackContext stackCtxOnFuncEntry[MAX_THREADS];
+    // updated when entering each bbl
+    StackContext stackCtxOnBBLEntry[MAX_THREADS];
 };
 
 

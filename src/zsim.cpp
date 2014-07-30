@@ -129,9 +129,9 @@ static inline void setCid(uint32_t tid, uint32_t cid) {
 static void printAppBacktrace(int tid) {
     constexpr int MAX_DEPTH = 64;
     void *stack[MAX_DEPTH];
-    const auto &sctx = zinfo->stackCtxOnFuncEntry[tid];
+    const auto &sctx = zinfo->stackCtxOnBBLEntry[tid];
     stack[0] = reinterpret_cast<void*>(sctx.cur_bbl_addr);
-    int depth = 1 + get_app_backtrace(sctx.rbp, sctx.rsp, sctx.stack_top,
+    int depth = 1 + get_app_backtrace(sctx.rbp, sctx.rsp, sctx.cur_bbl_addr,
             stack + 1, MAX_DEPTH - 1);
     fprintf(stderr, "%s[%d] backtrace of simulated prog: frames=%d\n",
             logHeader, tid, depth);
@@ -185,12 +185,10 @@ VOID PIN_FAST_ANALYSIS_CALL IndirectStoreSingle(THREADID tid, ADDRINT addr) {
 }
 
 VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, ADDRINT bblAddr, BblInfo* bblInfo, ADDRINT rbp, ADDRINT rsp) {
-    auto &&stackCtx = zinfo->stackCtxOnFuncEntry[tid];
+    auto &&stackCtx = zinfo->stackCtxOnBBLEntry[tid];
     stackCtx.cur_bbl_addr = bblAddr;
-    if (rbp) {
-        stackCtx.rbp = rbp;
-        stackCtx.rsp = rsp;
-    }
+    stackCtx.rbp = rbp;
+    stackCtx.rsp = rsp;
     fPtrs[tid].bblPtr(tid, bblAddr, bblInfo);
 }
 
@@ -631,32 +629,12 @@ VOID Trace(TRACE trace, VOID *v) {
         return;
 
     if (!procTreeNode->isInFastForward() || !zinfo->ffReinstrument) {
-        bool isFuncEntry = false;
-
-        {
-            RTN rtn = TRACE_Rtn(trace);
-            if (rtn != RTN_Invalid()) {
-                RTN_Open(rtn);
-                INS ins_rtn = RTN_InsHeadOnly(rtn),
-                    ins_trace = BBL_InsHead(TRACE_BblHead(trace));
-                if (ins_rtn != INS_Invalid() && ins_trace != INS_Invalid() &&
-                        INS_Address(ins_rtn) == INS_Address(ins_trace)) {
-                    isFuncEntry = true;
-                }
-                RTN_Close(rtn);
-            }
-        }
 
         // Visit every basic block in the trace
         for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
             BblInfo* bblInfo = Decoder::decodeBbl(bbl, zinfo->oooDecode);
-            if (isFuncEntry) {
-                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
-                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_REG_VALUE, REG_RBP, IARG_REG_VALUE, REG_RSP, IARG_END);
-            } else {
-                BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
-                        IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_ADDRINT, 0, IARG_ADDRINT, 0, IARG_END);
-            }
+            BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
+                    IARG_THREAD_ID, IARG_ADDRINT, BBL_Address(bbl), IARG_PTR, bblInfo, IARG_REG_VALUE, REG_RBP, IARG_REG_VALUE, REG_RSP, IARG_END);
         }
     }
 
@@ -910,7 +888,6 @@ VOID ThreadStart(THREADID tid, CONTEXT *ctxt, INT32 flags, VOID *v) {
      * It's here and not in main() because that way the auxiliary threads can
      * start.
      */
-    zinfo->stackCtxOnFuncEntry[tid].stack_top = PIN_GetContextReg(ctxt, REG_RSP);
     if (procTreeNode->isInPause()) {
         futex_lock(&zinfo->pauseLocks[procIdx]);  // initialize
         info("Pausing until notified");

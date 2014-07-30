@@ -21,6 +21,7 @@ libEnv["CPPFLAGS"] += libEnv["PINCPPFLAGS"]
 libEnv["LINKFLAGS"] += libEnv["PINLINKFLAGS"]
 libEnv["LIBPATH"] += libEnv["PINLIBPATH"]
 libEnv["LIBS"] += libEnv["PINLIBS"]
+libEnv["LIBS"] += ["unwind", "unwind-x86_64"]
 libEnv.SharedLibrary("zsim.so", libSrcs)
 
 # Build harness (static to make it easier to run across environments)

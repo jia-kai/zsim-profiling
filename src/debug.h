@@ -40,7 +40,7 @@ struct LibInfo {
 /*!
  * extract backtrace in the program being simulated
  */
-int get_app_backtrace(uintptr_t rbp, uintptr_t rsp, uintptr_t top,
+int get_app_backtrace(uintptr_t rbp, uintptr_t rsp, uintptr_t rip,
         void **stack, int max_depth);
 
 /*!
