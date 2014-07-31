@@ -38,6 +38,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <limits>
 
 class StackContext {
     static BblInfo m_bbl_sentinel;
@@ -63,7 +64,7 @@ class StackContext {
             return m_backtrace.size() + 1;
         }
 
-        void print() const;
+        void print(size_t max_depth = std::numeric_limits<size_t>::max()) const;
 };
 
 

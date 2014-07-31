@@ -30,7 +30,6 @@
 #include <algorithm>
 #include <bits/signum.h>
 #include <dlfcn.h>
-#include <execinfo.h>
 #include <fstream>
 #include <iostream>
 #include <sched.h>
@@ -124,13 +123,6 @@ static inline void setCid(uint32_t tid, uint32_t cid) {
     assert(cid < zinfo->numCores);
     cids[tid] = cid;
     cores[tid] = zinfo->cores[cid];
-}
-
-static void printAppBacktrace(int tid) {
-    auto &&ctx = zinfo->stackCtxOnBBLEntry[tid];
-    fprintf(stderr, "%s[%d] backtrace of simulated prog: frames=%d\n",
-            logHeader, tid, ctx.depth());
-    ctx.print();
 }
 
 uint32_t getCid(uint32_t tid) {
@@ -1010,7 +1002,7 @@ VOID ContextChange(THREADID tid, CONTEXT_CHANGE_REASON reason, const CONTEXT* fr
 
     if (reason == CONTEXT_CHANGE_REASON_FATALSIGNAL) {
         info("[%d] Fatal signal caught, finishing", tid);
-        printAppBacktrace(tid);
+        print_backtrace_app(tid);
         zinfo->sched->queueProcessCleanup(procIdx, getpid()); //the scheduler watchdog will remove all our state when we are really dead
         SimEnd();
     }
@@ -1432,13 +1424,9 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
         fprintf(stderr, "%s[%d]  Caused by invalid %saccess to address 0x%lx\n", logHeader, tid, faultyAccessStr, faultyAccessAddr);
     }
 
-    constexpr int MAX_DEPTH = 64;
-    void *stack[MAX_DEPTH];
-    int depth = backtrace(stack, MAX_DEPTH);
-    fprintf(stderr, "%s[%d] backtrace of pin/zsim:\n", logHeader, tid);
-    print_backtrace(stack, depth);
 
-    printAppBacktrace(tid);
+    print_backtrace_zsim();
+    print_backtrace_app(tid);
 
     entered = false;
 

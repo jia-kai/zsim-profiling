@@ -37,4 +37,12 @@ struct LibInfo {
 
 void print_backtrace(const void * const *stack, int depth);
 
+void print_backtrace_zsim();
+
+/*!
+ * print backtrace of the simulated program
+ * \param tid thread id, or -1 for current thread
+ */
+void print_backtrace_app(int tid = -1);
+
 #endif  // DEBUG_H_

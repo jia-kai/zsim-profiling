@@ -50,7 +50,7 @@ namespace gprof {
 }
 
 namespace gperftools {
-    constexpr size_t MAX_DEPTH = ProfileData::kMaxStackDepth;
+    constexpr size_t MAX_DEPTH = 32; //ProfileData::kMaxStackDepth;
     lock_t profile_data_lock;
     static ProfileData profile_data;
 
@@ -194,10 +194,12 @@ struct MemmapEntry {
     {}
 };
 
-void StackContext::print() const {
+void StackContext::print(size_t max_depth) const {
     std::vector<void*> bp;
     bp.push_back(reinterpret_cast<void*>(m_cur_bbl->addr));
-    for (auto i = m_backtrace.crbegin(); i != m_backtrace.crend(); i ++)
+    for (auto i = m_backtrace.crbegin();
+            i != m_backtrace.crend() && bp.size() < max_depth;
+            i ++)
         bp.push_back(reinterpret_cast<void*>(*i));
     print_backtrace(bp.data(), bp.size());
 }

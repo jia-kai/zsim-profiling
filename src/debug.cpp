@@ -23,12 +23,19 @@
  */
 
 #include "debug.h"
-#include "gperftools/sysinfo.h"
+#include "zsim.h"
+#include "app_prof.h"
+
+#include <pin.H>
+#include <execinfo.h>
 
 #include <sys/time.h>
 #include <sys/resource.h>
 
 #include <vector>
+
+#undef LOG
+#include "gperftools/sysinfo.h"
 
 struct MemmapEntry {
     uintptr_t low, high;
@@ -80,3 +87,20 @@ void print_backtrace(const void * const *stack, int depth) {
     }
 }
 
+void print_backtrace_zsim() {
+    constexpr int MAX_DEPTH = 20;
+    void *stack[MAX_DEPTH];
+    int depth = backtrace(stack, MAX_DEPTH);
+    fprintf(stderr, "%s[%d] backtrace of pin/zsim:\n", logHeader, PIN_ThreadId());
+    print_backtrace(stack, depth);
+}
+
+void print_backtrace_app(int tid) {
+    constexpr int MAX_DEPTH = 20;
+    if (tid == -1)
+        tid = PIN_ThreadId();
+    auto &&ctx = zinfo->stackCtxOnBBLEntry[tid];
+    fprintf(stderr, "%s[%d] backtrace of simulated prog: frames=%d\n",
+            logHeader, tid, ctx.depth());
+    ctx.print(MAX_DEPTH);
+}
