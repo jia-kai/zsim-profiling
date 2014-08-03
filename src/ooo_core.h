@@ -35,7 +35,6 @@
 #include "ooo_core_recorder.h"
 #include "pad.h"
 #include "zsim.h"
-#include "app_prof.h"
 
 // Uncomment to enable stall stats
 // #define OOO_STALL_STATS
@@ -434,7 +433,6 @@ class OOOCore : public Core {
         FwdEntry fwdArray[FWD_ENTRIES];
 
         OOOCoreRecorder cRec;
-        AppProfiler appProfiler;
 
     public:
         OOOCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name);

@@ -53,6 +53,9 @@ extern "C" {
 
 #define PORTS_015 (PORT_0 | PORT_1 | PORT_5)
 
+static lock_t bblInfoPtrMutex = 0;
+std::vector<BblInfo*> Decoder::bblInfoPtr;
+
 void DynUop::clear() {
     memset(this, 0, sizeof(DynUop));  // NOTE: This may break if DynUop becomes non-POD
 }
@@ -1447,6 +1450,11 @@ BblInfo* Decoder::decodeBbl(BBL bbl, bool oooDecoding) {
     bblInfo->bytes = bytes;
     bblInfo->addr = BBL_Address(bbl);
     {
+        futex_lock(&bblInfoPtrMutex);
+        bblInfo->id = bblInfoPtr.size();
+        bblInfoPtr.push_back(bblInfo);
+        futex_unlock(&bblInfoPtrMutex);
+
         using T = BblInfo::Type;
         INS last_ins = BBL_InsTail(bbl);
         if (INS_IsRet(last_ins))
@@ -1496,3 +1504,7 @@ void Decoder::dumpBblProfile() {
 
 #endif
 
+BblInfo* Decoder::bblId2Ptr(size_t id) {
+    assert(id < bblInfoPtr.size());
+    return bblInfoPtr[id];
+}

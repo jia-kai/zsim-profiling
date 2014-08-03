@@ -1137,9 +1137,9 @@ VOID SimEnd() {
         zinfo->statsBackend->dump(false);
         zinfo->eventualStatsBackend->dump(false);
         zinfo->compactStatsBackend->dump(false);
+        AppProfiler::fini();
 
         zinfo->sched->notifyTermination();
-        appprof_fini();
     }
 
     //Uncomment when debugging termination races, which can be rare because they are triggered by threads of a dying process
@@ -1433,10 +1433,6 @@ static EXCEPT_HANDLING_RESULT InternalExceptionHandler(THREADID tid, EXCEPTION_I
     return EHR_CONTINUE_SEARCH; //we never solve anything at all :P
 }
 
-VOID OnImageLoad(IMG img, void*) {
-    appprof_instrument_img(img);
-}
-
 /* ===================================================================== */
 
 int main(int argc, char *argv[]) {
@@ -1542,8 +1538,6 @@ int main(int argc, char *argv[]) {
 
     //Register instrumentation
     TRACE_AddInstrumentFunction(Trace, 0);
-    IMG_AddInstrumentFunction(OnImageLoad, 0);
-
     VdsoInit(); //initialized vDSO patching information (e.g., where all the possible vDSO entry points are)
 
     PIN_AddThreadStartFunction(ThreadStart, 0);

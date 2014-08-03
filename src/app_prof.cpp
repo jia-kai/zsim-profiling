@@ -22,177 +22,209 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * profiling output file format:
+ *
+ * all binary integers are uint64 in local endianness
+ *
+ * profile = magic bbl_prof map
+ *
+ * magic = "zsimprof"
+ *
+ * bbl_prof = nr_entry:int bbl_entry*
+ * bbl_entry = addr:int addr_last_instr:int hit_cnt:int self_cycle:int 
+ *             branch_nr_mispred:int call_prof
+ *
+ * call_prof = nr_entry:int call_entry*
+ * call_entry = dest_addr:int cnt:int cycle:int
+ *
+ * map = map_entry* map_entry_end
+ * map_entry = begin_addr:int end_addr:int file:str
+ * map_entry_end = 0:int 0:int "\x00"
+ *
+ * note that cycle in call_entry is the total cycles spent in callee and its
+ * children; 
+ */
+
 #include "app_prof.h"
 #include "debug.h"
-#include "zsim.h"
-#include "gperftools/profiledata.h"
+#include "decoder.h"
 
-static int get_profile_freq() {
-    return zinfo->freqMHz * 1000000ll / zinfo->appProfConfig.sampleCycles;
-}
+#include <unordered_map>
 
-constexpr int PROFILE_ENABLE_MASK_GPROF = 1, PROFILE_ENABLE_MASK_GPERFTOOLS = 2;
-uint64_t AppProfiler::sample_nr_cycle;
-int AppProfiler::enabled;
+BblInfo StackContext::m_bbl_sentinel;
+bool AppProfiler::sm_enabled;
+std::vector<AppProfiler*> AppProfiler::sm_instance;
 
-namespace gprof {
-    /*
-     * profil_count and related are copied from glibc
-     */
-    static u_short *samples;
-    static size_t nsamples;
-    static size_t pc_offset;
-    static u_int pc_scale;
+struct AppProfiler::BblProfile {
+    uint64_t nr_hit = 0, self_cycle = 0,
+             branch_nr_mispred = 0;
 
-    static void instrument_img(IMG img);
-    static int rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale);
-    static inline void update(size_t pc);
-}
+    struct Outcall {
+        uint64_t cnt = 0, cycle = 0;
+        void add(uint64_t cycle_) {
+            cnt ++;
+            cycle += cycle_;
+        }
+    };
 
-namespace gperftools {
-    constexpr size_t MAX_DEPTH = 32; //ProfileData::kMaxStackDepth;
-    lock_t profile_data_lock;
-    static ProfileData profile_data;
+    // key is callee bbl id
+    std::unordered_map<uint32_t, Outcall> outcall;
 
-    static void init();
-    static void fini();
-    static inline void update(const void * const * stack, int depth) {
-        futex_lock(&profile_data_lock);
-        profile_data.Add(depth, stack);
-        futex_unlock(&profile_data_lock);
+    const BblInfo *recent_callee = nullptr;
+
+    void add(uint64_t cycle) {
+        nr_hit ++;
+        self_cycle += cycle;
+    }
+
+    void merge_with(const BblProfile &other) {
+        nr_hit += other.nr_hit;
+        self_cycle += other.self_cycle;
+        branch_nr_mispred += other.branch_nr_mispred;
+        for (auto &&oc: other.outcall) {
+            auto &&t = outcall[oc.first];
+            t.cnt += oc.second.cnt;
+            t.cycle += oc.second.cycle;
+        }
     }
 };
 
-
-
-/* ===================== gprof begins =============================== */
-void gprof::instrument_img(IMG img) {
-    if (IMG_Name(img).find("libc.so") == std::string::npos)
-        return;
-    RTN rtn = RTN_FindByName(img, "profil");
-    if (rtn != RTN_Invalid()) {
-        RTN_Replace(rtn, (AFUNPTR)rep_profil);
-        info("replace profil in %s", IMG_Name(img).c_str());
-        rtn = RTN_FindByName(img, "__profile_frequency");
-        assert(rtn != RTN_Invalid());
-        RTN_Replace(rtn, (AFUNPTR)get_profile_freq);
-    }
+void AppProfiler::init() {
+    zinfo->stackCtxOnBBLEntry = new StackContext[MAX_THREADS];
+    zinfo->appProfiler = new AppProfiler[MAX_THREADS];
+    for (int i = 0; i < MAX_THREADS; i ++)
+        zinfo->appProfiler[i].m_tid = i;
+    sm_enabled = zinfo->profileOutputName != nullptr;
 }
 
-void gprof::update(size_t pc) {
-    size_t i = (pc - pc_offset) / 2;
-    if (sizeof (unsigned long long int) > sizeof (size_t))
-        i = (unsigned long long int) i * pc_scale / 65536;
-    else
-        i = i / 65536 * pc_scale + i % 65536 * pc_scale / 65536;
-    if (i < nsamples) {
-        __sync_fetch_and_add(samples + i, 1);
-    }
-}
-
-
-int gprof::rep_profil(u_short *sample_buffer, size_t size, size_t offset, u_int scale) {
-    warn("profil called, sample_buffer=%p", sample_buffer);
-    samples = sample_buffer;
-    if (!sample_buffer) {
-        AppProfiler::enabled = 0;
-        return 0;
-    }
-    assert_msg(!AppProfiler::enabled,
-            "another profiler other than gprof has been enabled");
-    AppProfiler::enabled = PROFILE_ENABLE_MASK_GPROF;
-    nsamples = size / sizeof *samples;
-    pc_offset = offset;
-    pc_scale = scale;
-    return 0;
-}
-
-/* ===================== gprof ends =============================== */
-
-
-/* ===================== gperftools begins =============================== */
-void gperftools::init() {
-    const char* out_name = zinfo->appProfConfig.gperftoolsOutputName;
-    if (!out_name)
-        return;
-    assert_msg(!AppProfiler::enabled,
-            "another profiler other than gperftools has been enabled");
-    warn("enabled gperftools profiling, output: %s", out_name);
-    AppProfiler::enabled = PROFILE_ENABLE_MASK_GPERFTOOLS;
-    futex_init(&profile_data_lock);
-    ProfileData::Options opt;
-    opt.set_frequency(get_profile_freq());
-    profile_data.Start(out_name, opt);
-}
-
-void gperftools::fini() {
-    if (!zinfo->appProfConfig.gperftoolsOutputName)
-        return;
-    profile_data.Stop();
-}
-
-/* ===================== gperftools ends =============================== */
-
-void appprof_init() {
-    AppProfiler::sample_nr_cycle = zinfo->appProfConfig.sampleCycles;
-    gperftools::init();
-}
-
-void appprof_fini() {
-    gperftools::fini();
-}
-
-void appprof_instrument_img(IMG img) {
-    gprof::instrument_img(img);
-}
-
-void AppProfiler::do_update(int tid, uint64_t cur_cycle) {
-    uint64_t next_cycle = m_prev_cycle + sample_nr_cycle;
-    assert_msg(next_cycle >= m_bbl_start_cycle,
-            "bad cycle: prev=%zd next=%zd bbl=[%zx,%zd]",
-            m_prev_cycle, next_cycle, m_bbl_start_cycle, cur_cycle);
-
-    // calculate PC inside this bbl under assumption that each instr takes same
-    // time and has same length
-
-    auto bbl_nr_cycle = cur_cycle - m_bbl_start_cycle;
-    auto &&ctx = zinfo->stackCtxOnBBLEntry[tid];
-    if (enabled == PROFILE_ENABLE_MASK_GPERFTOOLS) {
-        auto &&buf = m_stack_buf;
-        buf.clear();
-        buf.push_back(0);
-        for (auto i = ctx.m_backtrace.crbegin();
-                i != ctx.m_backtrace.crend() && buf.size() < gperftools::MAX_DEPTH;
-                i ++)
-            buf.push_back(reinterpret_cast<void*>(*i));
-
-        while (next_cycle < cur_cycle) {
-            auto addr = ctx.m_cur_bbl->addr +
-                ctx.m_cur_bbl->bytes * (next_cycle - m_bbl_start_cycle) / bbl_nr_cycle;
-            buf[0] = reinterpret_cast<void*>(addr);
-            gperftools::update(buf.data(), buf.size());
-            next_cycle += sample_nr_cycle;
+void AppProfiler::fini() {
+    if (sm_enabled) {
+        std::vector<BblProfile> merged;
+        for (AppProfiler *i: sm_instance) {
+            if (merged.empty())
+                merged = i->m_bbl_profile;
+            else {
+                if (i->m_bbl_profile.size() > merged.size())
+                    merged.resize(i->m_bbl_profile.size());
+                for (size_t idx = 0; idx < i->m_bbl_profile.size(); idx ++)
+                    merged[idx].merge_with(i->m_bbl_profile[idx]);
+            }
         }
+        FILE *fout = fopen(zinfo->profileOutputName, "wb");
+        info("Dumping profile output to %s", zinfo->profileOutputName);
+        dump_output(fout, merged);
+        fclose(fout);
+    }
+    delete []zinfo->appProfiler;
+    delete []zinfo->stackCtxOnBBLEntry;
+}
+
+void AppProfiler::dump_output(FILE *fout, const std::vector<BblProfile>& profile) {
+    const char *MAGIC = "zsimprof";
+
+    fputs(MAGIC, fout);
+
+    auto write_int = [&](uint64_t val) {
+        auto nr = fwrite(&val, sizeof(val), 1, fout);
+        assert(nr == 1);
+    };
+
+    uint64_t nr_bbl = 0;
+
+    for (auto &&i: profile)
+        nr_bbl += (i.nr_hit != 0);
+
+    write_int(nr_bbl);
+    for (size_t idx = 0; idx < profile.size(); idx ++) {
+        auto &&bprof = profile[idx];
+        if (bprof.nr_hit) {
+            // bbl
+            auto bbl = Decoder::bblId2Ptr(idx);
+            write_int(bbl->addr);
+            write_int(bbl->addr_end() - 1);
+            write_int(bprof.nr_hit);
+            write_int(bprof.self_cycle);
+            write_int(bprof.branch_nr_mispred);
+
+            // call
+            write_int(bprof.outcall.size());
+            for (auto &&oc: bprof.outcall) {
+                write_int(Decoder::bblId2Ptr(oc.first)->addr);
+                write_int(oc.second.cnt);
+                write_int(oc.second.cycle);
+            }
+        }
+    }
+
+    {
+        // dump memory map
+        fpos_t pos;
+        if (fgetpos(fout, &pos))
+            panic("failed to call fgetpos: %m");
+
+        int nr = 0;
+        write_int(nr);
+
+        get_mem_map(0, [&](uintptr_t lo, uintptr_t hi, const char *perm, const char *path) {
+            if (path && path[0] && perm[2] == 'x') {
+                write_int(lo);
+                write_int(hi);
+                fputs(path, fout);
+                fputc(0, fout);
+                nr ++;
+            }
+        });
+
+        if (fsetpos(fout, &pos))
+            panic("failed to call fsetpos");
+
+        write_int(nr);
+    }
+}
+
+AppProfiler::AppProfiler() {
+    sm_instance.push_back(this);
+}
+
+void AppProfiler::do_update(const BblInfo *bbl, uint64_t cycle) {
+    if (unlikely(bbl->id >= m_bbl_profile.size())) {
+        m_bbl_profile.resize(bbl->id * 3 / 2 + 1);
+    }
+
+    m_bbl_profile[bbl->id].add(cycle);
+
+    auto &&ctx = zinfo->stackCtxOnBBLEntry[m_tid];
+
+    using T = BblInfo::Type;
+    auto prev_bbl = ctx.m_cur_bbl;
+    if (unlikely(prev_bbl->type == T::END_WITH_CALL)) {
+        // prev_bbl calls bbl, record current cycle in caller and start
+        // counting in callee
+        ctx.m_backtrace.emplace_back(prev_bbl, ctx.m_topframe_cycle);
+        ctx.m_topframe_cycle = cycle;
+        m_bbl_profile[prev_bbl->id].recent_callee = bbl;
+    } else if (unlikely(prev_bbl->type == T::END_WITH_RET && !ctx.m_backtrace.empty())) {
+        auto &&caller = ctx.m_backtrace.back();
+        if (likely(caller.caller->addr_end() == bbl->addr)) {
+            // prev_bbl returns to recorded caller
+            // record call edge stat, and current cycle in caller is the sum
+            // of recorded cycle and accum cycle in callee
+            auto &&s = m_bbl_profile[caller.caller->id];
+            s.outcall[s.recent_callee->id].add(ctx.m_topframe_cycle);
+            s.recent_callee = nullptr;
+            ctx.m_topframe_cycle += caller.total_cycle + cycle;
+        } else {
+            warn("not return to caller, stack corrupted? long jump?");
+            ctx.m_topframe_cycle = cycle;
+        }
+        ctx.m_backtrace.pop_back();
     } else {
-        assert(gprof::samples);
-        while (next_cycle < cur_cycle) {
-            auto addr = ctx.m_cur_bbl->addr +
-                ctx.m_cur_bbl->bytes * (next_cycle - m_bbl_start_cycle) / bbl_nr_cycle;
-            gprof::update(addr);
-            next_cycle += sample_nr_cycle;
-        }
+        ctx.m_topframe_cycle += cycle;
     }
-    m_prev_cycle = next_cycle - sample_nr_cycle;
+
+    ctx.m_cur_bbl = bbl;
 }
-
-struct MemmapEntry {
-    uintptr_t low, high;
-    std::string file;
-
-    MemmapEntry(uint64_t low_, uint64_t high_, const char *file_):
-        low(low_), high(high_), file(file_)
-    {}
-};
 
 void StackContext::print(size_t max_depth) const {
     std::vector<void*> bp;
@@ -200,9 +232,7 @@ void StackContext::print(size_t max_depth) const {
     for (auto i = m_backtrace.crbegin();
             i != m_backtrace.crend() && bp.size() < max_depth;
             i ++)
-        bp.push_back(reinterpret_cast<void*>(*i));
+        bp.push_back(reinterpret_cast<void*>(i->caller->addr_end() - 1));
     print_backtrace(bp.data(), bp.size());
 }
-
-BblInfo StackContext::m_bbl_sentinel;
 

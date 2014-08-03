@@ -31,7 +31,6 @@
 #include "event_recorder.h"
 #include "memory_hierarchy.h"
 #include "pad.h"
-#include "app_prof.h"
 
 class FilterCache;
 
@@ -46,7 +45,6 @@ class TimingCore : public Core {
         uint64_t phaseEndCycle; //phase 1 end clock
 
         CoreRecorder cRec;
-        AppProfiler appProfiler;
 
     public:
         TimingCore(FilterCache* _l1i, FilterCache* _l1d, uint32_t domain, g_string& _name);

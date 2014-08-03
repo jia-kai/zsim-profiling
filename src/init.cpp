@@ -693,9 +693,6 @@ static void InitSystem(Config& config) {
     for (pair<string, CacheGroup*> kv : cMap) delete kv.second;
     cMap.clear();
 
-
-    zinfo->stackCtxOnBBLEntry = new StackContext[MAX_THREADS];
-
     info("Initialized system");
 }
 
@@ -912,8 +909,7 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
     config.get<bool>("sim.aslr", false);
 
     // profiling
-    zinfo->appProfConfig.sampleCycles = config.get<uint32_t>("sys.profiling.sampleCycles", 10000);
-    zinfo->appProfConfig.gperftoolsOutputName = config.get<const char*>("sys.profiling.gperftoolsOutputName", nullptr);
+    zinfo->profileOutputName = gm_strdup(config.get<const char*>("sys.profileOutputName", ""));
 
     //Write config out
     bool strictConfig = config.get<bool>("sim.strictConfig", true); //if true, panic on unused variables
@@ -921,7 +917,7 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
 
     zinfo->contentionSim->postInit();
 
-    appprof_init();
+    AppProfiler::init();
 
     info("Initialization complete");
 

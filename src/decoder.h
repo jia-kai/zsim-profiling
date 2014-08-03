@@ -28,6 +28,7 @@
 
 #include <stdint.h>
 #include <vector>
+#include <mutex>
 #include "pin.H"
 
 // Uncomment to get a count of BBLs run. This is currently used to get a distribution of inaccurate instructions decoded that are actually run
@@ -123,10 +124,14 @@ class Decoder {
                 //Put registers in some canonical order -- non-flags first
                 void reorderRegs(uint32_t* regArray, uint32_t numRegs);
         };
+        
+        
+        static std::vector<BblInfo*> bblInfoPtr;
 
     public:
         //If oooDecoding is true, produces a DynBbl with DynUops that can be used in OOO cores
         static BblInfo* decodeBbl(BBL bbl, bool oooDecoding);
+        static BblInfo* bblId2Ptr(size_t id);
 
 #ifdef BBL_PROFILING
         static void profileBbl(uint64_t bblIdx);

@@ -34,9 +34,6 @@
 
 #include <vector>
 
-#undef LOG
-#include "gperftools/sysinfo.h"
-
 struct MemmapEntry {
     uintptr_t low, high;
     std::string file;
@@ -46,22 +43,40 @@ struct MemmapEntry {
     {}
 };
 
+void get_mem_map(int pid, std::function<void(uintptr_t, uintptr_t, const char*, const char*)> callback) {
+    char fpath[64];
+    if (pid)
+        sprintf(fpath, "/proc/%d/maps", pid);
+    else
+        strcpy(fpath, "/proc/self/maps");
+    FILE *fin = fopen(fpath, "r");
+    assert_msg(fin, "failed to open %s", fpath);
+    char linebuf[512];
+    while (fgets(linebuf, sizeof(linebuf), fin)) {
+        uintptr_t begin, end;
+        char perm[10], offset[20], dev[10], inode[20], path_mem[256], *path;
+        int nr = sscanf(linebuf, "%zx-%zx %s %s %s %s %s",
+                &begin, &end, perm, offset, dev, inode, path_mem);
+        if (nr == 6)
+            path = nullptr;
+        else {
+            assert_msg(nr == 7, "failed to parse map line: %s", linebuf);
+            path = path_mem;
+        }
+        callback(begin, end, perm, path);
+    }
+    fclose(fin);
+}
+
 void print_backtrace(const void * const *stack, int depth) {
     std::vector<MemmapEntry> memmap;
-    {
-        ProcMapsIterator piter(0);
-        uintptr_t lo, hi;
-        char *fname;
-        while (piter.Next(&lo, &hi, nullptr, nullptr, nullptr, &fname)) {
-            if (fname && strlen(fname)) {
-                memmap.emplace_back(lo, hi, fname);
-                // fprintf(stderr, "memmap: 0x%zx-0x%zx: %s\n", lo, hi, fname);
-            }
-        }
-    }
+    get_mem_map(0, [&](uintptr_t lo, uintptr_t hi, const char *perm, const char *fname){
+        if (fname && strlen(fname))
+            memmap.emplace_back(lo, hi, fname);
+    });
 
     for (int i = 0; i < depth; i ++) {
-        fprintf(stderr, "============================\nframe %d/%d: %p\n",
+        fprintf(stderr, "============================ frame %d/%d: %p ",
                 i, depth, stack[i]);
         auto addr = reinterpret_cast<uintptr_t>(stack[i]);
         bool found = false;
@@ -75,6 +90,7 @@ void print_backtrace(const void * const *stack, int depth) {
                 if (j.file.find(".so") != std::string::npos)
                     addr -= j.low;
 
+                fprintf(stderr, " (%s:0x%zx)\n", j.file.c_str(), addr);
                 snprintf(cmd, sizeof(cmd), "addr2line -p -i -f -C -e %s 0x%zx 1>&2",
                         j.file.c_str(), addr);
                 if (system(cmd))

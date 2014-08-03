@@ -31,7 +31,6 @@
 #include "core.h"
 #include "memory_hierarchy.h"
 #include "pad.h"
-#include "app_prof.h"
 
 class FilterCache;
 
@@ -44,8 +43,6 @@ class SimpleCore : public Core {
         uint64_t curCycle;
         uint64_t phaseEndCycle; //next stopping point
         uint64_t haltedCycles;
-
-        AppProfiler appProfiler;
 
     public:
         SimpleCore(FilterCache* _l1i, FilterCache* _l1d, g_string& _name);

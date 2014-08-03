@@ -25,16 +25,12 @@
 #pragma once
 
 /*
- * profile the program being simulated
- *
- * the program is sampled on phase end, and statistics are fed to gperftools
- * (https://code.google.com/p/gperftools/) for further processing
+ * provides StackContext for backtracing and AppProfiler for profiling
  */
 
 #include "log.h"
 #include "core.h"
-
-#include <pin.H>
+#include "zsim.h"
 
 #include <cstdint>
 #include <vector>
@@ -44,22 +40,42 @@ class StackContext {
     static BblInfo m_bbl_sentinel;
     const BblInfo *m_cur_bbl = &m_bbl_sentinel;
 
-    // pc of call instr of outer frames
-    std::vector<uintptr_t> m_backtrace;
+    // total cycles of the top frame since the function entry,
+    // including children
+    uint64_t m_topframe_cycle = 0;
+
+    struct StackFrame {
+        const BblInfo *caller;
+
+        uint64_t total_cycle;
+
+        StackFrame() = default;
+
+        StackFrame(const BblInfo *caller_):
+            caller(caller_)
+        {}
+
+        StackFrame(const BblInfo *caller_, uint64_t total_cycle_):
+            caller(caller_), total_cycle(total_cycle_)
+        {}
+    };
+
+    // frames except the current one
+    std::vector<StackFrame> m_backtrace;
 
     friend class AppProfiler;
 
+    void update_noprofiling(const BblInfo *bbl) {
+        using T = BblInfo::Type;
+        if (unlikely(m_cur_bbl->type == T::END_WITH_CALL))
+            m_backtrace.emplace_back(m_cur_bbl);
+        else if (unlikely(m_cur_bbl->type == T::END_WITH_RET))
+            m_backtrace.pop_back();
+        m_cur_bbl = bbl;
+    };
+
+
     public:
-
-        void update(const BblInfo *bbl) {
-            using T = BblInfo::Type;
-            if (unlikely(m_cur_bbl->type == T::END_WITH_CALL))
-                m_backtrace.push_back(m_cur_bbl->addr + m_cur_bbl->bytes - 1);
-            else if (unlikely(m_cur_bbl->type == T::END_WITH_RET))
-                m_backtrace.pop_back();
-            m_cur_bbl = bbl;
-        };
-
         int depth() const {
             return m_backtrace.size() + 1;
         }
@@ -68,36 +84,39 @@ class StackContext {
 };
 
 
-void appprof_init();
-void appprof_fini();
-
-void appprof_instrument_img(IMG img);
-
 /*!
- * application profiler per core
+ * each thread must have its own AppProfiler, so there is no need to lock
  */
 class AppProfiler {
-    uint64_t m_prev_cycle = 0, m_bbl_start_cycle = 0;
-    std::vector<void*> m_stack_buf;
-    static uint64_t sample_nr_cycle;
-    friend void appprof_init();
+    static bool sm_enabled;
+    static std::vector<AppProfiler*> sm_instance;
 
-    void do_update(int tid, uint64_t cur_cycle);
+    struct BblProfile;
+    std::vector<BblProfile> m_bbl_profile;
+    int m_tid;
+
+    AppProfiler();
+    void do_update(const BblInfo *bbl, uint64_t cycle);
+
+    static void dump_output(FILE *fout, const std::vector<BblProfile>& profile);
 
     public:
-        static int enabled;
 
-        // must be called after simulating each bbl
-        void update(int tid, uint64_t cur_cycle) {
-            if (enabled) {
-                if (cur_cycle - m_prev_cycle > sample_nr_cycle)
-                    do_update(tid, cur_cycle);
-                m_bbl_start_cycle = cur_cycle;
-            }
+        // on zsim init
+        static void init();
+
+        // on zsim exit
+        static void fini();
+
+        /*
+         * must be called after simulating each bbl to update profiling data
+         * \param cur_cycle core cycle count after finishing this bbl
+         */
+        void update(const BblInfo *bbl, uint64_t cycle) {
+            if (sm_enabled)
+                do_update(bbl, cycle);
+            else
+                zinfo->stackCtxOnBBLEntry[m_tid].update_noprofiling(bbl);
         }
 };
 
-/*!
- * resolve symbols and print backtrace to stderr
- */
-void print_backtrace(const StackContext &ctx);

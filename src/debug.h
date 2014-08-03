@@ -26,6 +26,9 @@
 #ifndef DEBUG_H_
 #define DEBUG_H_
 
+#include <cstddef>
+#include <functional>
+
 //This header has common debugging datastructure defs.
 
 /* Describes the addresses at which libzsim.so is loaded. GDB needs this. */
@@ -44,5 +47,13 @@ void print_backtrace_zsim();
  * \param tid thread id, or -1 for current thread
  */
 void print_backtrace_app(int tid = -1);
+
+/*!
+ * get memory map of a process
+ * \param pid process id, 0 for self
+ * \param callback callback function, which takes (begin, end, perm, filepath) *
+ *      arguments
+ */
+void get_mem_map(int pid, std::function<void(uintptr_t, uintptr_t, const char *, const char*)> callback);
 
 #endif  // DEBUG_H_

@@ -506,8 +506,6 @@ void OOOCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     core->bbl(bblInfo);
 
     if (likely(prevBbl != nullptr)) {
-        zinfo->stackCtxOnBBLEntry[tid].update(prevBbl);
-        core->appProfiler.update(tid, core->curCycle);
     }
 
     while (core->curCycle > core->phaseEndCycle) {

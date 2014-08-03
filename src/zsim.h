@@ -45,7 +45,8 @@ class EventRecorder;
 class PinCmd;
 class PortVirtualizer;
 class VectorCounter;
-struct StackContext;
+class StackContext;
+class AppProfiler;
 
 struct ClockDomainInfo {
     uint64_t realtimeOffsetNs;
@@ -172,16 +173,12 @@ struct GlobSimInfo {
     volatile bool globalPauseFlag; //if set, pauses simulation on phase end
     volatile bool externalTermPending;
 
-    // config for profiling
-    struct AppProfConfig {
-        int sampleCycles; 
-        const char* gperftoolsOutputName;   // NULL if profiling not enabled
-    };
-    AppProfConfig appProfConfig;
-
     // used for backtracing the program being simulated
     // updated when entering a BBL; indexed by thread id
     StackContext *stackCtxOnBBLEntry;
+
+    const char* profileOutputName;  // empty if profiling not enabled
+    AppProfiler *appProfiler;       // profiler for each thread
 };
 
 

@@ -111,9 +111,9 @@ void SimpleCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 
 void SimpleCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     SimpleCore* core = static_cast<SimpleCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bbl(bblInfo);
-    zinfo->stackCtxOnBBLEntry[tid].update(bblInfo);
-    core->appProfiler.update(tid, core->curCycle);
+    zinfo->appProfiler[tid].update(bblInfo, core->curCycle - startCycle);
 
     while (core->curCycle > core->phaseEndCycle) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);

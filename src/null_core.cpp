@@ -71,9 +71,6 @@ void NullCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     NullCore* core = static_cast<NullCore*>(cores[tid]);
     core->bbl(bblInfo);
 
-    zinfo->stackCtxOnBBLEntry[tid].update(bblInfo);
-    core->appProfiler.update(tid, core->curCycle);
-
     while (unlikely(core->curCycle > core->phaseEndCycle)) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
         core->phaseEndCycle += zinfo->phaseLength;

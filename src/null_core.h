@@ -30,15 +30,12 @@
 
 #include "core.h"
 #include "pad.h"
-#include "app_prof.h"
 
 class NullCore : public Core {
     protected:
         uint64_t instrs;
         uint64_t curCycle;
         uint64_t phaseEndCycle; //next stopping point
-
-        AppProfiler appProfiler;
 
     public:
         explicit NullCore(g_string& _name);
