@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Tue Aug 05 14:44:48 2014 -0700
+# $Date: Tue Aug 05 16:31:32 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -338,6 +338,10 @@ class ProfileResult(object):
         cmd.extend(map(mhex, addr))
 
         logger.info('addr2line: {} in {}'.format(addr_brief, obj_path))
+        if not os.path.exists(obj_path):
+            logger.error('mapped object {} '
+                         'does not exist on filesystem'.format(obj_path))
+            return [AbsSourceLocation(i, Unknown) for i in addr]
 
         subp = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         text_result = subp.communicate()[0]
@@ -602,9 +606,25 @@ def main():
     work(args)
 
 
+
+class LogFormatter(logging.Formatter):
+    def format(self, record):
+        date = '\x1b[32m[%(asctime)s.%(msecs)03d]\x1b[0m'
+        msg = '%(message)s'
+        if record.levelno == logging.ERROR:
+            fmt = '{} \x1b[1;4;31mERR\x1b[0m {}'.format(date, msg)
+        else:
+            fmt = date + ' ' + msg
+        self._fmt = fmt
+        return super(LogFormatter, self).format(record)
+
+def setup_logging():
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setFormatter(LogFormatter(datefmt='%H:%M:%S'))
+    ch.setLevel(logging.DEBUG)
+    logger.addHandler(ch)
+
 if __name__ == '__main__':
-    logging.basicConfig(
-        format='\033[1;31m[%(asctime)s.%(msecs)03d]\033[0m'
-        ' %(message)s',
-        datefmt='%H:%M:%S', level=logging.INFO)
+    setup_logging()
     main()
