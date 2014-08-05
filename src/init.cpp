@@ -909,7 +909,9 @@ void SimInit(const char* configFile, const char* outputDir, uint32_t shmid) {
     config.get<bool>("sim.aslr", false);
 
     // profiling
-    zinfo->profileOutputName = gm_strdup(config.get<const char*>("sys.profileOutputName", ""));
+    zinfo->profileOutputName = config.get<const char*>("sys.profileOutputName", nullptr);
+    if (zinfo->profileOutputName)
+        zinfo->profileOutputName = gm_strdup(zinfo->profileOutputName);
 
     //Write config out
     bool strictConfig = config.get<bool>("sim.strictConfig", true); //if true, panic on unused variables

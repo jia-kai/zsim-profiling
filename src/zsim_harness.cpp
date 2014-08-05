@@ -112,7 +112,7 @@ void chldSigHandler(int sig) {
     assert_msg(cpid > 0, "Wait should not fail, cpid=%d", cpid);
     int idx = eraseChild(cpid);
     if (idx < MAX_THREADS) {
-        info("Child %d done: exitcode=%d", cpid, WEXITSTATUS(status));
+        info("Child %d done", cpid);
         int exitCode = WIFEXITED(status)? WEXITSTATUS(status) : 0;
         if (exitCode == PANIC_EXIT_CODE) {
             panic("Child issued a panic, killing simulation");

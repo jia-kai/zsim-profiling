@@ -39,6 +39,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <unordered_map>
 #include "constants.h"
 #include "contention_sim.h"
 #include "core.h"
@@ -588,33 +589,14 @@ VOID Instruction(INS ins) {
     VdsoInstrument(ins);
 }
 
-static bool TraceShouldInstrument(TRACE trace) {
-    RTN rtn = TRACE_Rtn(trace);
-    if (!RTN_Valid(rtn))
-        return true;
-
-    IMG img = SEC_Img(RTN_Sec(rtn));
-    std::string img_name = IMG_Name(img);
-    if (img_name.find("libc.so") == std::string::npos)
-        return true;
-    std::string fname = RTN_Name(rtn);
-
-    // do not instrument mcount for performance considerations
-    if (fname.find("mcount") != std::string::npos) {
-        info("do not instrument %s:%s", img_name.c_str(), fname.c_str());
-        return false;
-    }
-    return true;
-}
-
 VOID Trace(TRACE trace, VOID *v) {
-    if (!TraceShouldInstrument(trace))
-        return;
+    uint32_t rtnId = RTNManager::ins().get_id(trace);
 
     if (!procTreeNode->isInFastForward() || !zinfo->ffReinstrument) {
         // Visit every basic block in the trace
         for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
             BblInfo* bblInfo = Decoder::decodeBbl(bbl, zinfo->oooDecode);
+            bblInfo->rtnId = rtnId;
             BBL_InsertCall(bbl, IPOINT_BEFORE /*could do IPOINT_ANYWHERE if we redid load and store simulation in OOO*/, (AFUNPTR)IndirectBasicBlock, IARG_FAST_ANALYSIS_CALL,
                     IARG_THREAD_ID, IARG_PTR, bblInfo, IARG_END);
         }

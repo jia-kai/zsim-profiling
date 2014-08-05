@@ -117,7 +117,9 @@ void TimingCore::StoreAndRecordFunc(THREADID tid, ADDRINT addr) {
 
 void TimingCore::BblAndRecordFunc(THREADID tid, const BblInfo* bblInfo) {
     TimingCore* core = static_cast<TimingCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bblAndRecord(bblInfo);
+    zinfo->appProfiler[tid].update(bblInfo, core->curCycle - startCycle);
 
     while (core->curCycle > core->phaseEndCycle) {
 

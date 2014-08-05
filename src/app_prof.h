@@ -32,9 +32,12 @@
 #include "core.h"
 #include "zsim.h"
 
+#include <pin.H>
+
 #include <cstdint>
 #include <vector>
 #include <limits>
+#include <unordered_map>
 
 class StackContext {
     static BblInfo m_bbl_sentinel;
@@ -45,18 +48,28 @@ class StackContext {
     uint64_t m_topframe_cycle = 0;
 
     struct StackFrame {
-        const BblInfo *caller;
+        /*
+         * jmp to another function, caused by optimized sibling and tail
+         * recursive calls, would also be considered as call and result in a
+         * stack frame. is_actual_call is used to distinguish jmp from actual
+         * call
+         */
+        bool is_actual_call;
+
+        const BblInfo *caller, *callee;
 
         uint64_t total_cycle;
 
         StackFrame() = default;
 
-        StackFrame(const BblInfo *caller_):
-            caller(caller_)
+        StackFrame(bool is_actual_call_, const BblInfo *caller_):
+            is_actual_call(is_actual_call_), caller(caller_)
         {}
 
-        StackFrame(const BblInfo *caller_, uint64_t total_cycle_):
-            caller(caller_), total_cycle(total_cycle_)
+        StackFrame(bool is_actual_call_, const BblInfo *caller_,
+                const BblInfo *callee_, uint64_t total_cycle_):
+            is_actual_call(is_actual_call_),
+            caller(caller_), callee(callee_), total_cycle(total_cycle_)
         {}
     };
 
@@ -67,10 +80,14 @@ class StackContext {
 
     void update_noprofiling(const BblInfo *bbl) {
         using T = BblInfo::Type;
-        if (unlikely(m_cur_bbl->type == T::END_WITH_CALL))
-            m_backtrace.emplace_back(m_cur_bbl);
-        else if (unlikely(m_cur_bbl->type == T::END_WITH_RET))
+        auto prev_bbl = m_cur_bbl;
+        bool is_call = prev_bbl->type == T::END_WITH_CALL;
+        if (unlikely(m_cur_bbl->type == T::END_WITH_RET)) {
+            while (!m_backtrace.back().is_actual_call)
+                m_backtrace.pop_back();
             m_backtrace.pop_back();
+        } else if (unlikely(is_call || prev_bbl->rtnId != bbl->rtnId))
+            m_backtrace.emplace_back(is_call, m_cur_bbl);
         m_cur_bbl = bbl;
     };
 
@@ -81,6 +98,30 @@ class StackContext {
         }
 
         void print(size_t max_depth = std::numeric_limits<size_t>::max()) const;
+};
+
+
+/*!
+ * manages routines resolved by PIN
+ */
+class RTNManager {
+    struct RTNEntry {
+        uint32_t id = 0, size;
+    };
+    // rtn address to rtn size
+    lock_t m_mutex = 0;
+    std::unordered_map<uint64_t, RTNEntry> m_addr2entry;
+
+    RTNManager() = default;
+    RTNManager(const RTNManager &) = delete;
+    RTNManager& operator = (const RTNManager &) = delete;
+
+    friend class AppProfiler;
+
+    public:
+        static RTNManager& ins();
+
+        uint32_t get_id(TRACE trace);
 };
 
 

@@ -32,11 +32,12 @@
 #include "stats.h"
 
 struct BblInfo {
-    enum class Type {
+    enum class Type: uint8_t {
         NORMAL, END_WITH_CALL, END_WITH_RET
     };
     Type type = Type::NORMAL;
-    uint32_t id = 0;    // bbls have uniq and consecutive ids, to be indexed by the profiler
+    uint32_t rtnId = 0;    // id of the routine containing this BBL
+    uint32_t id = 0;    // bbls have uniq and consecutive ids, to be used for indexing in the profiler
     uint32_t instrs = 0;
     uint32_t bytes = 0;
     uint64_t addr = 0;

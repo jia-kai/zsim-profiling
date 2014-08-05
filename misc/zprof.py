@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Sat Aug 02 20:56:00 2014 -0700
+# $Date: Tue Aug 05 11:42:49 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -11,6 +11,7 @@ import logging
 import subprocess
 import os
 import sys
+import weakref
 logger = logging.getLogger(__name__)
 
 ZSIM_PROF_MAGIC = 'zsimprof'
@@ -80,6 +81,9 @@ class BBLEntry(Structure):
     loc = None
     """:class:`AbsSourceLocation` object"""
 
+    func_prof = None
+    """weak reference to :class:`FuncProf`"""
+
 
 class CallEntry(Structure):
     _fields_ = [('dest', c_uint64),
@@ -91,16 +95,53 @@ class MemMapEntry(Structure):
     _fields_ = [('begin', c_uint64), ('end', c_uint64)]
     path = None
 
+    def __str__(self):
+        return '[{}-{}] {}'.format(mhex(self.begin), mhex(self.end), self.path)
+
+class RTNEntry(Structure):
+    _fields_ = [('begin', c_uint64), ('size', c_uint64)]
+
+    @property
+    def end(self):
+        return self.begin + self.size
+
 
 class FuncProf(object):
-    __slots__ = ['bbl_list',    # list of :class:`BBLEntry`
-                 'self_cycle']
+    bbl_list = None
+    """list of :class:`BBLEntry`"""
+
+    self_cycle = None
 
     def __init__(self, bbl_list):
         """:param bbl_list: list of :class:`BBLEntry`"""
         assert isinstance(bbl_list, list) and len(bbl_list) > 0
         self.bbl_list = bbl_list[:]
         self.self_cycle = sum(i.self_cycle for i in bbl_list)
+
+        ref_self = weakref.proxy(self)
+        for i in bbl_list:
+            i.func_prof = ref_self
+
+        self._merge_out_call()
+
+    def _merge_out_call(self):
+        prev = self.bbl_list[0]
+        for cur in self.bbl_list[1:]:
+            prev_dest2ent = {i.dest: i for i in prev.call_entry}
+            for i in cur.call_entry:
+                pent = prev_dest2ent.get(i.dest)
+                if pent:
+                    i.cnt += pent.cnt
+                    i.cycle += pent.cycle
+                    found = False
+                    for idx, p in enumerate(prev.call_entry):
+                        if p.dest == i.dest:
+                            found = True
+                            del prev.call_entry[idx]
+                            break
+                    assert found
+
+            prev = cur
 
     @property
     def nr_call(self):
@@ -116,7 +157,7 @@ class FuncProf(object):
 
 
 class ProfileResult(object):
-    bbl_entry = None
+    bbl_list = None
     """list of :class:`BBLEntry`"""
 
     addr2loc = None
@@ -131,55 +172,68 @@ class ProfileResult(object):
     func_entry_addr = None
     """set of all call destinations"""
 
+    rtn_list = None
+    """list of :class:`RTNEntry`"""
+
     def __init__(self, args):
         mem_map = self._load_data(args.input)
         self._init_addr2loc(mem_map, args.basedir)
-        for i in self.bbl_entry:
+        for i in self.bbl_list:
             i.loc = self.addr2loc[i.addr]
-        self._group_by_func()
+        self._build_func_prof()
         self._check()
 
-    def _group_by_func(self):
+        # self._dump()
+
+    def _dump(self):
+        for i in self.func_prof:
+            sys.stdout.write('function: {}\n'.format(i.loc.func))
+        for i in self.bbl_list:
+            if not i.call_entry:
+                continue
+            src = self.addr2loc[i.addr_last]
+            for j in i.call_entry:
+                dest = self.addr2loc[j.dest]
+                sys.stdout.write('call {}({})=>{}({}): cnt={} cyc={}\n'.format(
+                    src.func, mhex(src.addr),
+                    dest.func, mhex(dest.addr), j.cnt, j.cycle))
+
+    def _build_func_prof(self):
         logger.info('building profiling result for each function ...')
-        self.bbl_entry.sort(key=lambda i: i.addr)
+        self.bbl_list.sort(key=lambda i: i.addr)
         self.func_entry_addr = set()
-        for i in self.bbl_entry:
+        for i in self.bbl_list:
             self.func_entry_addr.update([j.dest for j in i.call_entry])
-        func_prof = self.func_prof = list()
 
-        bbl_list = []
-        last_func = None
-        def update():
-            if bbl_list:
-                func_prof.append(FuncProf(bbl_list))
-                del bbl_list[:]
 
-        # assume consecutive BBLs with identical file:func, 
-        # where additionally non-first BBLs are not call entries,
-        # are in one function
+        self.func_prof = func_prof = list()
 
-        # check whether directly called into the middle of an annotated function
-        # func_used: set of annotated functions already processed
-        func_used = set()
+        def add(idx):
+            if add.idx_end < idx:
+                func_prof.append(FuncProf(self.bbl_list[add.idx_end:idx]))
+                add.idx_end = idx
+        add.idx_end = 0
 
-        for i in self.bbl_entry:
-            loc = i.loc
-            cur_func = loc.func_id
-            if i.addr in self.func_entry_addr or cur_func != last_func:
-                if cur_func is not Unknown:
-                    assert cur_func not in func_used, \
-                        'called to middle of func? loc={} func={}'.format(
-                            loc, cur_func)
-                    func_used.add(loc)
-                last_func = cur_func
-                update()
-            bbl_list.append(i)
+        bbl_idx = 0
+        try:
+            for rtn in self.rtn_list:
+                while self.bbl_list[bbl_idx].addr < rtn.begin:
+                    bbl_idx += 1
+                add(bbl_idx)
+                while self.bbl_list[bbl_idx].addr < rtn.end:
+                    bbl_idx += 1
+                add(bbl_idx)
+        except IndexError:
+            pass
+        add(len(self.bbl_list))
 
-        update()
+        logger.info('found {} functions (rtns={})'.format(
+            len(func_prof), len(self.rtn_list)))
 
     def _check(self):
-        for i in self.bbl_entry:
+        for i in self.bbl_list:
             assert i.addr in self.addr2loc
+            assert i.func_prof, i.loc
             if i.call_entry:
                 assert i.addr_last in self.addr2loc
             for j in i.call_entry:
@@ -188,7 +242,7 @@ class ProfileResult(object):
 
     def _init_addr2loc(self, mem_map, basedir):
         addr = list()
-        for i in self.bbl_entry:
+        for i in self.bbl_list:
             addr.append(i.addr)
             if i.branch_nr_mispred or i.call_entry:
                 addr.append(i.addr_last)
@@ -197,31 +251,28 @@ class ProfileResult(object):
         mem_map = sorted(mem_map, key=lambda i: i.begin)
 
         addr.append(max(addr[-1], mem_map[-1].end) + 1)
-        result = list()
 
+        self.addr2loc = addr2loc = dict()
         addr_idx = 0
 
-        try:
-            for ment in mem_map:
-                while addr[addr_idx] < ment.begin:
-                    result.append(AbsSourceLocation(addr[addr_idx], Unknown))
-                    addr_idx += 1
+        for ment in mem_map:
+            while addr[addr_idx] < ment.begin:
+                cur = addr[addr_idx]
+                addr2loc[cur] = AbsSourceLocation(cur, Unknown)
+                addr_idx += 1
 
-                addr_idx_end = addr_idx
-                while addr[addr_idx_end] < ment.end:
-                    addr_idx_end += 1
+            addr_idx_begin = addr_idx
+            while addr[addr_idx] < ment.end:
+                addr_idx += 1
 
-                cur_addr = addr[addr_idx:addr_idx_end]
-                result.extend(self._addr2loc_onefile(
-                    ment.path, cur_addr, ment.begin, basedir))
-        except IndexError:
-            pass
+            cur_addr = addr[addr_idx_begin:addr_idx]
+            result = self._addr2loc_onefile(
+                ment.path, cur_addr, ment.begin, basedir)
+            assert len(cur_addr) == len(result)
+            addr2loc.update(zip(cur_addr, result))
 
-        while len(result) < len(addr):
-            p = len(result) - 1
-            result.append(AbsSourceLocation(addr[p], Unknown))
-
-        self.addr2loc = dict(zip(addr, result))
+        for cur in addr[addr_idx:-1]:
+            addr2loc[cur] = AbsSourceLocation(cur, Unknown)
 
     def _addr2loc_onefile(self, obj_path, addr, mmap_begin, basedir):
         def relpath(fpath):
@@ -301,20 +352,28 @@ class ProfileResult(object):
             magic = fin.read(len(ZSIM_PROF_MAGIC))
             assert magic == ZSIM_PROF_MAGIC, 'bad file format'
             logger.info('Loading profiling stats ...')
-            nr_bbl_entry = readint()
-            self.bbl_entry = bbl_entry = list()
-            for _ in xrange(nr_bbl_entry):
+            nr_bbl_list = readint()
+            self.bbl_list = bbl_list = list()
+            for _ in xrange(nr_bbl_list):
                 cur = BBLEntry()
                 fin.readinto(cur)
                 nr_call_entry = readint()
                 call_entry = (CallEntry * nr_call_entry)()
                 fin.readinto(call_entry)
                 cur.call_entry = list(call_entry)
-                bbl_entry.append(cur)
+                bbl_list.append(cur)
 
-            self.addr2bbl = {i.addr: i for i in bbl_entry}
+            self.addr2bbl = {i.addr: i for i in bbl_list}
 
-            logger.info('{} BBL entries loaded'.format(nr_bbl_entry))
+            logger.info('{} BBL entries loaded'.format(nr_bbl_list))
+
+            self.rtn_list = rtn_list = list()
+            nr_rtn = readint()
+            for _ in range(nr_rtn):
+                cur = RTNEntry()
+                fin.readinto(cur)
+                rtn_list.append(cur)
+            rtn_list.sort(key=lambda x: x.begin)
 
             nr_map = readint()
             mem_map = list()
@@ -383,6 +442,7 @@ class CallgrindWriter(object):
     def __init__(self, prof_rst):
         self.func_prof = prof_rst.func_prof
         self.addr2loc = prof_rst.addr2loc
+        self.addr2bbl = prof_rst.addr2bbl
 
     def _wrline(self, *args):
         """write a line"""
@@ -441,12 +501,13 @@ class CallgrindWriter(object):
                 for call in bbl.call_entry:
                     ref_loc = None
                     src = self.addr2loc[bbl.addr_last]
-                    dest = self.addr2loc[call.dest]
+                    dest = self.addr2bbl[call.dest].func_prof.loc
                     self._ps_callee_obj(dest.obj_path)
                     self._ps_callee_src(dest.src_path)
                     self._ps_callee_func(dest.func)
                     self._wrline('calls={} {} {}'.format(
-                        call.cnt, mhex(dest.addr), dest.line))
+                        call.cnt, mhex(dest.addr),
+                        0 if dest.line is Unknown else dest.line))
                     instr, line = self._get_subposition(ref_loc, src)
                     self._wrline(instr, line, call.cycle, 0)
 
@@ -461,14 +522,14 @@ class CallgrindWriter(object):
 
         instr = loc.addr
         line = loc.line
-        if line is Unknown:
-            line = '*' if ref_loc else 0
         if ref_loc is not None:
             instr = rela(instr - ref_loc.addr)
-            if ref_loc.line is not Unknown:
+            if ref_loc.line is not Unknown and line is not Unknown:
                 line = rela(line - ref_loc.line)
         else:
             instr = mhex(instr)
+        if line is Unknown:
+            line = '*' if ref_loc else 0
 
         return instr, line
 

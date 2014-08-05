@@ -25,6 +25,7 @@
 
 #include "null_core.h"
 #include "zsim.h"
+#include "app_prof.h"
 
 NullCore::NullCore(g_string& _name) : Core(_name), instrs(0), curCycle(0), phaseEndCycle(0) {}
 
@@ -69,7 +70,9 @@ void NullCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {}
 
 void NullCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     NullCore* core = static_cast<NullCore*>(cores[tid]);
+    auto startCycle = core->curCycle;
     core->bbl(bblInfo);
+    zinfo->appProfiler[tid].update(bblInfo, core->curCycle - startCycle);
 
     while (unlikely(core->curCycle > core->phaseEndCycle)) {
         assert(core->phaseEndCycle == zinfo->globPhaseCycles + zinfo->phaseLength);
