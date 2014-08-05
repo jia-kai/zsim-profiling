@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Tue Aug 05 11:42:49 2014 -0700
+# $Date: Tue Aug 05 14:44:48 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -39,6 +39,33 @@ class Unknown(object):
 
 Unknown = Unknown()
 
+def make_cost_class(name_list):
+    """create a class to represent profile cost"""
+    class Cost(Structure):
+        _fields_ = [(i, c_uint64) for i in name_list]
+
+        def __add__(self, rhs):
+            rst = Cost()
+            for i in name_list:
+                val = getattr(self, i) + getattr(rhs, i)
+                setattr(rst, i, val)
+            return rst
+
+        def __str__(self):
+            return 'Cost({})'.format(', '.join(
+                '{}={}'.format(k, getattr(self, k))
+                for k in name_list))
+
+        def raw_str(self):
+            return ' '.join([str(getattr(self, i)) for i in name_list])
+
+        @staticmethod
+        def namelist_str():
+            return ' '.join(name_list)
+
+    return Cost
+
+
 class AbsSourceLocation(object):
     __slots__ = ['addr', 'obj_path', 'src_path', 'func', 'line']
 
@@ -71,9 +98,10 @@ class AbsSourceLocation(object):
 class BBLEntry(Structure):
     _fields_ = [('addr', c_uint64),
                 ('addr_last', c_uint64),
-                ('nr_hit', c_uint64),
-                ('self_cycle', c_uint64),
-                ('branch_nr_mispred', c_uint64)]
+                ('nr_hit', c_uint64)]
+
+    self_cost = None
+    """instance of class returned by :meth:`make_cost_class`"""
 
     call_entry = None
     """list of :class:`CallEntry` objects"""
@@ -87,8 +115,10 @@ class BBLEntry(Structure):
 
 class CallEntry(Structure):
     _fields_ = [('dest', c_uint64),
-                ('cnt', c_uint64),
-                ('cycle', c_uint64)]
+                ('cnt', c_uint64)]
+
+    cost = None
+    """instance of class returned by :meth:`make_cost_class`"""
 
 
 class MemMapEntry(Structure):
@@ -110,13 +140,15 @@ class FuncProf(object):
     bbl_list = None
     """list of :class:`BBLEntry`"""
 
-    self_cycle = None
+    self_cost = None
 
     def __init__(self, bbl_list):
         """:param bbl_list: list of :class:`BBLEntry`"""
         assert isinstance(bbl_list, list) and len(bbl_list) > 0
-        self.bbl_list = bbl_list[:]
-        self.self_cycle = sum(i.self_cycle for i in bbl_list)
+        bbl_list = bbl_list[:]
+        self.bbl_list = bbl_list
+        self.self_cost = sum([i.self_cost for i in bbl_list[1:]],
+                             bbl_list[0].self_cost)
 
         ref_self = weakref.proxy(self)
         for i in bbl_list:
@@ -132,7 +164,7 @@ class FuncProf(object):
                 pent = prev_dest2ent.get(i.dest)
                 if pent:
                     i.cnt += pent.cnt
-                    i.cycle += pent.cycle
+                    i.cost += pent.cost
                     found = False
                     for idx, p in enumerate(prev.call_entry):
                         if p.dest == i.dest:
@@ -153,7 +185,7 @@ class FuncProf(object):
 
     @property
     def avg_self_cycle(self):
-        return float(self.self_cycle) / self.nr_call
+        return float(self.self_cost.cycle) / self.nr_call
 
 
 class ProfileResult(object):
@@ -196,7 +228,7 @@ class ProfileResult(object):
                 dest = self.addr2loc[j.dest]
                 sys.stdout.write('call {}({})=>{}({}): cnt={} cyc={}\n'.format(
                     src.func, mhex(src.addr),
-                    dest.func, mhex(dest.addr), j.cnt, j.cycle))
+                    dest.func, mhex(dest.addr), j.cnt, j.cost.cycle))
 
     def _build_func_prof(self):
         logger.info('building profiling result for each function ...')
@@ -244,8 +276,7 @@ class ProfileResult(object):
         addr = list()
         for i in self.bbl_list:
             addr.append(i.addr)
-            if i.branch_nr_mispred or i.call_entry:
-                addr.append(i.addr_last)
+            addr.append(i.addr_last)
 
         addr.sort()
         mem_map = sorted(mem_map, key=lambda i: i.begin)
@@ -342,62 +373,67 @@ class ProfileResult(object):
     
     def _load_data(self, fpath):
         """:return: memory map list"""
-        def readint():
-            n = c_uint64()
+        def readobj(t, costattr=None):
+            v = t()
             # undocumented but usable on python 2.7
-            fin.readinto(n)
-            return n.value
+            fin.readinto(v)
+            if costattr:
+                setattr(v, costattr, readcost())
+            return v
+
+        def readstr():
+            v = list()
+            while True:
+                ch = fin.read(1)
+                if ch == '\x00':
+                    break
+                v.append(ch)
+            return ''.join(v)
+
+        readint = lambda: readobj(c_uint64).value
+        readcost = lambda: readobj(Cost)
 
         with open(fpath) as fin:
             magic = fin.read(len(ZSIM_PROF_MAGIC))
             assert magic == ZSIM_PROF_MAGIC, 'bad file format'
             logger.info('Loading profiling stats ...')
+
+            nr_cost = readint()
+            cost_name_list = [readstr() for _ in xrange(nr_cost)]
+            Cost = make_cost_class(cost_name_list)
+
             nr_bbl_list = readint()
             self.bbl_list = bbl_list = list()
             for _ in xrange(nr_bbl_list):
-                cur = BBLEntry()
-                fin.readinto(cur)
+                cur = readobj(BBLEntry, 'self_cost')
                 nr_call_entry = readint()
-                call_entry = (CallEntry * nr_call_entry)()
-                fin.readinto(call_entry)
-                cur.call_entry = list(call_entry)
+                cur.call_entry = [readobj(CallEntry, 'cost')
+                                  for _ in range(nr_call_entry)]
                 bbl_list.append(cur)
 
             self.addr2bbl = {i.addr: i for i in bbl_list}
 
             logger.info('{} BBL entries loaded'.format(nr_bbl_list))
 
-            self.rtn_list = rtn_list = list()
             nr_rtn = readint()
-            for _ in range(nr_rtn):
-                cur = RTNEntry()
-                fin.readinto(cur)
-                rtn_list.append(cur)
-            rtn_list.sort(key=lambda x: x.begin)
+            self.rtn_list = [readobj(RTNEntry) for _ in xrange(nr_rtn)]
+            self.rtn_list.sort(key=lambda x: x.begin)
 
             nr_map = readint()
             mem_map = list()
             for _ in xrange(nr_map):
-                cur = MemMapEntry()
-                fin.readinto(cur)
-                path = list()
-                while True:
-                    ch = fin.read(1)
-                    assert ch, 'premature end of file'
-                    if ch == '\x00':
-                        break
-                    path.append(ch)
-                cur.path = ''.join(path)
+                cur = readobj(MemMapEntry)
+                cur.path = readstr()
                 mem_map.append(cur)
 
             return mem_map
 
 def show_top(prof_rst, args):
-    frst = sorted(prof_rst.func_prof, key=lambda i: -i.self_cycle)[:args.topn]
+    frst = sorted(prof_rst.func_prof, key=lambda i: -i.self_cost.cycle)[:args.topn]
 
     for idx, ent in enumerate(frst):
         sys.stdout.write('======= top {}: cycles={} calls={} avg={:.2f}\n'.format(
-            idx, ent.self_cycle, ent.nr_call, ent.avg_self_cycle))
+            idx, ent.self_cost.cycle, ent.nr_call, ent.avg_self_cycle))
         sys.stdout.write('  {}\n'.format(ent.loc))
 
 
@@ -480,7 +516,8 @@ class CallgrindWriter(object):
     def _work(self):
         self._wrline('creator: zsim profiler')
         self._wrline('positions: instr line')
-        self._wrline('events: cycle branch_mispred')
+        self._wrline('events: {}'.format(
+            self.func_prof[0].bbl_list[0].self_cost.namelist_str()))
         for func in self.func_prof:
             loc = func.loc
             a = self._ps_obj(loc.obj_path)
@@ -495,8 +532,7 @@ class CallgrindWriter(object):
                     self._ps_func.force_write()
             for bbl in func.bbl_list:
                 instr, line = self._get_subposition(ref_loc, bbl.loc)
-                self._wrline(instr, line, bbl.self_cycle,
-                             bbl.branch_nr_mispred)
+                self._wrline(instr, line, bbl.self_cost.raw_str())
                 ref_loc = bbl.loc
                 for call in bbl.call_entry:
                     ref_loc = None
@@ -509,7 +545,7 @@ class CallgrindWriter(object):
                         call.cnt, mhex(dest.addr),
                         0 if dest.line is Unknown else dest.line))
                     instr, line = self._get_subposition(ref_loc, src)
-                    self._wrline(instr, line, call.cycle, 0)
+                    self._wrline(instr, line, call.cost.raw_str())
 
     @staticmethod
     def _get_subposition(ref_loc, loc):

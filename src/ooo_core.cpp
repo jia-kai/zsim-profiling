@@ -503,11 +503,14 @@ void OOOCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
 void OOOCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
     auto startCycle = core->curCycle;
+    auto nrMispred = core->mispredBranches;
     const BblInfo *prevBbl = core->prevBbl;
     core->bbl(bblInfo);
 
     if (likely(prevBbl != nullptr)) {
-        zinfo->appProfiler[tid].update(prevBbl, core->curCycle - startCycle);
+        zinfo->appProfiler[tid].update(prevBbl,
+                {core->curCycle - startCycle,
+                core->mispredBranches - nrMispred});
     }
 
     while (core->curCycle > core->phaseEndCycle) {

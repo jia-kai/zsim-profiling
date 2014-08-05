@@ -27,23 +27,25 @@
  *
  * all binary integers are uint64 in local endianness
  *
- * profile = magic bbl_prof rtn_list mem_map
+ * profile = magic cost_desc bbl_prof rtn_list mem_map
  *
  * magic = "zsimprof"
  *
+ * cost_desc = nr_cost:int cost_name:str*
+ *
  * bbl_prof = nr_entry:int bbl_entry*
- * bbl_entry = addr:int addr_last_instr:int hit_cnt:int self_cycle:int 
- *             branch_nr_mispred:int call_prof
+ * bbl_entry = addr:int addr_last_instr:int hit_cnt:int cost call_prof
  *
  * call_prof = nr_entry:int call_entry*
- * call_entry = dest_addr:int cnt:int cycle:int
+ * call_entry = dest_addr:int cnt:int cost
  *
  * rtn_list = nr_rtn_list:int rtn_entry*
  * rtn_entry = begin:int end:int
  *
- * mem_map = map_entry* map_entry_end
+ * mem_map = nr_entry:int map_entry*
  * map_entry = begin_addr:int end_addr:int file:str
- * map_entry_end = 0:int 0:int "\x00"
+ *
+ * cost = cost_item:int*
  *
  * note that cycle in call_entry is the total cycles spent in callee and its
  * children; 
@@ -53,40 +55,46 @@
 #include "debug.h"
 #include "decoder.h"
 
+#include <type_traits>
+
 // #define DUMP_CALL
 
 BblInfo StackContext::m_bbl_sentinel;
 bool AppProfiler::sm_enabled;
 std::vector<AppProfiler*> AppProfiler::sm_instance;
 
+const char* ProfileCost::METRIC_NAME[ProfileCost::NR_METRIC] = {
+    "cycle", "branch_nr_mispred"
+};
+
 struct AppProfiler::BblProfile {
-    uint64_t nr_hit = 0, self_cycle = 0,
-             branch_nr_mispred = 0;
+    uint64_t nr_hit = 0;
+    ProfileCost self_cost;
 
     struct Outcall {
-        uint64_t cnt = 0, cycle = 0;
-        void add(uint64_t cycle_) {
+        uint64_t cnt = 0;
+        ProfileCost cost;
+        void add(const ProfileCost &cost_) {
             cnt ++;
-            cycle += cycle_;
+            cost.merge_with(cost_);
         }
     };
 
     // key is callee bbl id
     std::unordered_map<uint32_t, Outcall> outcall;
 
-    void add(uint64_t cycle) {
+    void add(const ProfileCost &cost) {
         nr_hit ++;
-        self_cycle += cycle;
+        self_cost.merge_with(cost);
     }
 
     void merge_with(const BblProfile &other) {
         nr_hit += other.nr_hit;
-        self_cycle += other.self_cycle;
-        branch_nr_mispred += other.branch_nr_mispred;
+        self_cost.merge_with(other.self_cost);
         for (auto &&oc: other.outcall) {
             auto &&t = outcall[oc.first];
             t.cnt += oc.second.cnt;
-            t.cycle += oc.second.cycle;
+            t.cost.merge_with(oc.second.cost);
         }
     }
 };
@@ -132,6 +140,25 @@ void AppProfiler::dump_output(FILE *fout, const std::vector<BblProfile>& profile
         assert(nr == 1);
     };
 
+    auto write_cost = [&](const ProfileCost &val) {
+        static_assert(sizeof(ProfileCost) == sizeof(uint64_t) * ProfileCost::NR_METRIC &&
+                std::is_pod<ProfileCost>::value, "bad ProfileCost");
+        auto nr = fwrite(&val, sizeof(ProfileCost), 1, fout);
+        assert(nr == 1);
+    };
+
+    auto write_str = [&](const char *s) {
+        fputs(s, fout);
+        fputc(0, fout);
+    };
+
+    {
+        // dump cost description
+        write_int(ProfileCost::NR_METRIC);
+        for (int i = 0; i < ProfileCost::NR_METRIC; i ++)
+            write_str(ProfileCost::METRIC_NAME[i]);
+    }
+
     {
         // dump bbl
         uint64_t nr_bbl = 0;
@@ -147,15 +174,14 @@ void AppProfiler::dump_output(FILE *fout, const std::vector<BblProfile>& profile
                 write_int(bbl->addr);
                 write_int(bbl->addr_end() - 1);
                 write_int(bprof.nr_hit);
-                write_int(bprof.self_cycle);
-                write_int(bprof.branch_nr_mispred);
+                write_cost(bprof.self_cost);
 
                 // call
                 write_int(bprof.outcall.size());
                 for (auto &&oc: bprof.outcall) {
                     write_int(Decoder::bblId2Ptr(oc.first)->addr);
                     write_int(oc.second.cnt);
-                    write_int(oc.second.cycle);
+                    write_cost(oc.second.cost);
                 }
             }
         }
@@ -184,8 +210,7 @@ void AppProfiler::dump_output(FILE *fout, const std::vector<BblProfile>& profile
             if (path && path[0] && perm[2] == 'x') {
                 write_int(lo);
                 write_int(hi);
-                fputs(path, fout);
-                fputc(0, fout);
+                write_str(path);
                 nr ++;
             }
         });
@@ -205,12 +230,12 @@ AppProfiler::AppProfiler() {
 static std::vector<std::string> rtn_id2name;
 #endif
 
-void AppProfiler::do_update(const BblInfo *bbl, uint64_t cycle) {
+void AppProfiler::do_update(const BblInfo *bbl, const ProfileCost &cost) {
     if (unlikely(bbl->id >= m_bbl_profile.size())) {
         m_bbl_profile.resize(bbl->id * 3 / 2 + 1);
     }
 
-    m_bbl_profile[bbl->id].add(cycle);
+    m_bbl_profile[bbl->id].add(cost);
 
     auto &&ctx = zinfo->stackCtxOnBBLEntry[m_tid];
 
@@ -219,28 +244,28 @@ void AppProfiler::do_update(const BblInfo *bbl, uint64_t cycle) {
     bool is_call = prev_bbl->type == T::END_WITH_CALL;
     if (unlikely(prev_bbl->type == T::END_WITH_RET)) {
         // prev_bbl returns to recorded caller, which should proceed current rtn
-        auto inclusive_cycle = ctx.m_topframe_cycle;
+        auto inclusive_cost = ctx.m_topframe_cost;
         StackContext::StackFrame *caller_frame;
         for (; ; ) {
             caller_frame = &ctx.m_backtrace.back();
-            m_bbl_profile[caller_frame->caller->id].
-                outcall[caller_frame->callee->id].add(inclusive_cycle);
 #ifdef DUMP_CALL
             printf("exit call: %s(%zx)=>%s(%zx)\n", 
                     rtn_id2name[caller_frame->caller->rtnId].c_str(), caller_frame->caller->addr,
                     rtn_id2name[caller_frame->callee->rtnId].c_str(), caller_frame->callee->addr),
 #endif
-            inclusive_cycle += caller_frame->total_cycle;
+            m_bbl_profile[caller_frame->caller->id].
+                outcall[caller_frame->callee->id].add(inclusive_cost);
+            inclusive_cost.merge_with(caller_frame->total_cost);
             if (caller_frame->is_actual_call)
                 break;
             ctx.m_backtrace.pop_back();
         }
         if (likely(caller_frame->caller->addr_end() == bbl->addr)) {
-            inclusive_cycle += cycle;
-            ctx.m_topframe_cycle = inclusive_cycle;
+            inclusive_cost.merge_with(cost);
+            ctx.m_topframe_cost = inclusive_cost;
         } else {
             warn("not return to caller, stack corrupted? long jump?");
-            ctx.m_topframe_cycle = cycle;
+            ctx.m_topframe_cost = cost;
         }
         ctx.m_backtrace.pop_back();
     } else if (unlikely(is_call || prev_bbl->rtnId != bbl->rtnId)) {
@@ -253,11 +278,11 @@ void AppProfiler::do_update(const BblInfo *bbl, uint64_t cycle) {
                 rtn_id2name[bbl->rtnId].c_str(), bbl->addr);
 #endif
 
-        ctx.m_backtrace.emplace_back(is_call,
-                prev_bbl, bbl, ctx.m_topframe_cycle);
-        ctx.m_topframe_cycle = cycle;
+        ctx.m_backtrace.emplace_back(
+                is_call, prev_bbl, bbl, ctx.m_topframe_cost);
+        ctx.m_topframe_cost = cost;
     } else {
-        ctx.m_topframe_cycle += cycle;
+        ctx.m_topframe_cost.merge_with(cost);
     }
 
     ctx.m_cur_bbl = bbl;

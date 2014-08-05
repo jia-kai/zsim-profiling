@@ -39,13 +39,34 @@
 #include <limits>
 #include <unordered_map>
 
+class ProfileCost {
+    static constexpr int NR_METRIC = 2;
+    static const char* METRIC_NAME[NR_METRIC];
+    uint64_t m_cycle, m_branch_nr_mispred;
+
+    friend class AppProfiler;
+
+    public:
+        ProfileCost() = default;
+
+        ProfileCost(uint64_t cycle, uint64_t branch_nr_mispred = 0):
+            m_cycle(cycle), m_branch_nr_mispred(branch_nr_mispred)
+        {
+        }
+    
+        void merge_with(const ProfileCost &c) {
+            m_cycle += c.m_cycle;
+            m_branch_nr_mispred += c.m_branch_nr_mispred;
+        }
+};
+
 class StackContext {
     static BblInfo m_bbl_sentinel;
     const BblInfo *m_cur_bbl = &m_bbl_sentinel;
 
     // total cycles of the top frame since the function entry,
     // including children
-    uint64_t m_topframe_cycle = 0;
+    ProfileCost m_topframe_cost = 0;
 
     struct StackFrame {
         /*
@@ -58,7 +79,7 @@ class StackContext {
 
         const BblInfo *caller, *callee;
 
-        uint64_t total_cycle;
+        ProfileCost total_cost;
 
         StackFrame() = default;
 
@@ -67,9 +88,9 @@ class StackContext {
         {}
 
         StackFrame(bool is_actual_call_, const BblInfo *caller_,
-                const BblInfo *callee_, uint64_t total_cycle_):
+                const BblInfo *callee_, const ProfileCost &total_cost_):
             is_actual_call(is_actual_call_),
-            caller(caller_), callee(callee_), total_cycle(total_cycle_)
+            caller(caller_), callee(callee_), total_cost(total_cost_)
         {}
     };
 
@@ -137,7 +158,7 @@ class AppProfiler {
     int m_tid;
 
     AppProfiler();
-    void do_update(const BblInfo *bbl, uint64_t cycle);
+    void do_update(const BblInfo *bbl, const ProfileCost &cost);
 
     static void dump_output(FILE *fout, const std::vector<BblProfile>& profile);
 
@@ -153,9 +174,9 @@ class AppProfiler {
          * must be called after simulating each bbl to update profiling data
          * \param cur_cycle core cycle count after finishing this bbl
          */
-        void update(const BblInfo *bbl, uint64_t cycle) {
+        void update(const BblInfo *bbl, const ProfileCost &cost) {
             if (sm_enabled)
-                do_update(bbl, cycle);
+                do_update(bbl, cost);
             else
                 zinfo->stackCtxOnBBLEntry[m_tid].update_noprofiling(bbl);
         }
