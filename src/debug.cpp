@@ -76,8 +76,8 @@ void print_backtrace(const void * const *stack, int depth) {
     });
 
     for (int i = 0; i < depth; i ++) {
-        fprintf(stderr, "============================ frame %d/%d: %p ",
-                i, depth, stack[i]);
+        fprintf(stderr, "#%-3d ", i);
+        fflush(stderr);
         auto addr = reinterpret_cast<uintptr_t>(stack[i]);
         bool found = false;
         for (auto &j: memmap)
@@ -90,8 +90,7 @@ void print_backtrace(const void * const *stack, int depth) {
                 if (j.file.find(".so") != std::string::npos)
                     addr -= j.low;
 
-                fprintf(stderr, " (%s:0x%zx)\n", j.file.c_str(), addr);
-                snprintf(cmd, sizeof(cmd), "addr2line -p -i -f -C -e %s 0x%zx 1>&2",
+                snprintf(cmd, sizeof(cmd), "addr2line -a -p -i -f -C -e %s 0x%zx 1>&2",
                         j.file.c_str(), addr);
                 if (system(cmd))
                     fprintf(stderr, "failed to exec: %s\n", cmd);
@@ -99,7 +98,7 @@ void print_backtrace(const void * const *stack, int depth) {
                 break;
             }
         if (!found)
-            fprintf(stderr, "not found in memory map\n");
+            fprintf(stderr, "<not found in memory map>\n");
     }
 }
 
