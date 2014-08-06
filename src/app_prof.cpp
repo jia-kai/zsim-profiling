@@ -57,7 +57,7 @@
 
 #include <type_traits>
 
-#define DUMP_CALL
+// #define DUMP_CALL
 
 BblInfo StackContext::m_bbl_sentinel;
 bool AppProfiler::sm_enabled;
