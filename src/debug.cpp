@@ -93,7 +93,7 @@ void print_backtrace(const void * const *stack, int depth) {
                 snprintf(cmd, sizeof(cmd), "addr2line -a -p -i -f -C -e %s 0x%zx 1>&2",
                         j.file.c_str(), addr);
                 if (system(cmd))
-                    fprintf(stderr, "failed to exec: %s\n", cmd);
+                    fprintf(stderr, "   failed to exec: %s\n", cmd);
                 found = true;
                 break;
             }
