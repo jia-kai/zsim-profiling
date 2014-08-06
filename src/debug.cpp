@@ -98,7 +98,7 @@ void print_backtrace(const void * const *stack, int depth) {
                 break;
             }
         if (!found)
-            fprintf(stderr, "%016zx <not found in memory map>\n", addr);
+            fprintf(stderr, "0x%016zx <not found in memory map>\n", addr);
     }
 }
 
