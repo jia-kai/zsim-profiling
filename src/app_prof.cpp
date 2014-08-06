@@ -57,7 +57,7 @@
 
 #include <type_traits>
 
-// #define DUMP_CALL
+#define DUMP_CALL
 
 BblInfo StackContext::m_bbl_sentinel;
 bool AppProfiler::sm_enabled;
@@ -111,6 +111,7 @@ void AppProfiler::fini() {
     if (sm_enabled) {
         std::vector<BblProfile> merged;
         for (AppProfiler *i: sm_instance) {
+            i->exit_all_frame();
             if (merged.empty())
                 merged = i->m_bbl_profile;
             else {
@@ -228,6 +229,7 @@ AppProfiler::AppProfiler() {
 
 #ifdef DUMP_CALL
 static std::vector<std::string> rtn_id2name;
+static lock_t print_lock;
 #endif
 
 void AppProfiler::do_update(const BblInfo *bbl, const ProfileCost &cost) {
@@ -249,9 +251,12 @@ void AppProfiler::do_update(const BblInfo *bbl, const ProfileCost &cost) {
         for (; ; ) {
             caller_frame = &ctx.m_backtrace.back();
 #ifdef DUMP_CALL
-            printf("exit call: %s(%zx)=>%s(%zx)\n", 
+            futex_lock(&print_lock);
+            printf("[%d] exit call: %s(%zx)=>%s(%zx)\n", 
+                    m_tid,
                     rtn_id2name[caller_frame->caller->rtnId].c_str(), caller_frame->caller->addr,
-                    rtn_id2name[caller_frame->callee->rtnId].c_str(), caller_frame->callee->addr),
+                    rtn_id2name[caller_frame->callee->rtnId].c_str(), caller_frame->callee->addr);
+            futex_unlock(&print_lock);
 #endif
             m_bbl_profile[caller_frame->caller->id].
                 outcall[caller_frame->callee->id].add(inclusive_cost);
@@ -273,9 +278,12 @@ void AppProfiler::do_update(const BblInfo *bbl, const ProfileCost &cost) {
         // rtns, assume prev_bbl calls bbl
 
 #ifdef DUMP_CALL
-        printf("enter call: %s(%zx)=>%s(%zx)\n", 
+        futex_lock(&print_lock);
+        printf("[%d] enter call: %s(%zx)=>%s(%zx)\n", 
+                m_tid,
                 rtn_id2name[prev_bbl->rtnId].c_str(), prev_bbl->addr,
                 rtn_id2name[bbl->rtnId].c_str(), bbl->addr);
+        futex_unlock(&print_lock);
 #endif
 
         ctx.m_backtrace.emplace_back(
@@ -286,6 +294,18 @@ void AppProfiler::do_update(const BblInfo *bbl, const ProfileCost &cost) {
     }
 
     ctx.m_cur_bbl = bbl;
+}
+
+void AppProfiler::exit_all_frame() {
+    auto &&ctx = zinfo->stackCtxOnBBLEntry[m_tid];
+    auto inclusive_cost = ctx.m_topframe_cost;
+    while (!ctx.m_backtrace.empty()) {
+        auto &&caller_frame = ctx.m_backtrace.back();
+        m_bbl_profile[caller_frame.caller->id].
+            outcall[caller_frame.callee->id].add(inclusive_cost);
+        inclusive_cost.merge_with(caller_frame.total_cost);
+        ctx.m_backtrace.pop_back();
+    }
 }
 
 void StackContext::print(size_t max_depth) const {
@@ -311,7 +331,7 @@ uint32_t RTNManager::get_id(TRACE trace) {
     ADDRINT addr = RTN_Address(rtn);
     bool is_plt = false;
     if (RTN_Name(rtn) == ".plt") {
-        addr = TRACE_Address(trace);
+        addr = TRACE_Address(trace) & ~0xFull;
         is_plt = true;
     }
     futex_lock(&m_mutex);

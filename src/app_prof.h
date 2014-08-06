@@ -158,7 +158,9 @@ class AppProfiler {
     int m_tid;
 
     AppProfiler();
+
     void do_update(const BblInfo *bbl, const ProfileCost &cost);
+    void exit_all_frame();
 
     static void dump_output(FILE *fout, const std::vector<BblProfile>& profile);
 
