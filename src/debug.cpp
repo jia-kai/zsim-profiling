@@ -93,12 +93,12 @@ void print_backtrace(const void * const *stack, int depth) {
                 snprintf(cmd, sizeof(cmd), "addr2line -a -p -i -f -C -e %s 0x%zx 1>&2",
                         j.file.c_str(), addr);
                 if (system(cmd))
-                    fprintf(stderr, "failed to exec: %s\n", cmd);
+                    fprintf(stderr, "   failed to exec: %s\n", cmd);
                 found = true;
                 break;
             }
         if (!found)
-            fprintf(stderr, "<not found in memory map>\n");
+            fprintf(stderr, "0x%016zx <not found in memory map>\n", addr);
     }
 }
 

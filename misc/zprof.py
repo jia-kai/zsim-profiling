@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Tue Aug 05 16:31:32 2014 -0700
+# $Date: Tue Aug 05 17:37:13 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -135,6 +135,9 @@ class RTNEntry(Structure):
     def end(self):
         return self.begin + self.size
 
+    def __str__(self):
+        return 'RTN({}-{})'.format(mhex(self.begin), mhex(self.end))
+
 
 class FuncProf(object):
     bbl_list = None
@@ -230,8 +233,33 @@ class ProfileResult(object):
                     src.func, mhex(src.addr),
                     dest.func, mhex(dest.addr), j.cnt, j.cost.cycle))
 
+    def _rm_overlap_rtn(self):
+        # remove overlapped RTNs; I guess such overlapping is caused by
+        # mishandling of RTN in PIN
+
+        rtn_list = self.rtn_list
+        nr_remove = 0
+        idx = 1
+        while idx < len(rtn_list):
+            prev = rtn_list[idx - 1]
+            cur = rtn_list[idx]
+            is_sep = prev.end <= cur.begin
+            is_contain = prev.begin <= cur.begin and prev.end >= cur.end
+            assert is_sep ^ is_contain, \
+                '{} {} {}'.format(prev, i, self.addr2loc[prev.begin])
+            if is_contain:
+                nr_remove += 1
+                del rtn_list[idx]
+            else:
+                idx += 1
+
+        if nr_remove:
+            logger.warn('removed {} overlapped RTN(s)'.format(nr_remove))
+
     def _build_func_prof(self):
+        self._rm_overlap_rtn()
         logger.info('building profiling result for each function ...')
+
         self.bbl_list.sort(key=lambda i: i.addr)
         self.func_entry_addr = set()
         for i in self.bbl_list:
@@ -249,12 +277,16 @@ class ProfileResult(object):
         bbl_idx = 0
         try:
             for rtn in self.rtn_list:
+                idx0 = bbl_idx
                 while self.bbl_list[bbl_idx].addr < rtn.begin:
                     bbl_idx += 1
                 add(bbl_idx)
                 while self.bbl_list[bbl_idx].addr < rtn.end:
                     bbl_idx += 1
                 add(bbl_idx)
+                if idx0 == bbl_idx:
+                    logger.warning('no bbl lies in {} ({})'.format(
+                        rtn, self.addr2loc[rtn.begin]))
         except IndexError:
             pass
         add(len(self.bbl_list))
@@ -273,12 +305,14 @@ class ProfileResult(object):
                 assert j.dest in self.addr2loc
 
     def _init_addr2loc(self, mem_map, basedir):
-        addr = list()
+        addr = set()
         for i in self.bbl_list:
-            addr.append(i.addr)
-            addr.append(i.addr_last)
+            addr.add(i.addr)
+            addr.add(i.addr_last)
+        for i in self.rtn_list:
+            addr.add(i.begin)
 
-        addr.sort()
+        addr = sorted(addr)
         mem_map = sorted(mem_map, key=lambda i: i.begin)
 
         addr.append(max(addr[-1], mem_map[-1].end) + 1)
@@ -611,7 +645,9 @@ class LogFormatter(logging.Formatter):
     def format(self, record):
         date = '\x1b[32m[%(asctime)s.%(msecs)03d]\x1b[0m'
         msg = '%(message)s'
-        if record.levelno == logging.ERROR:
+        if record.levelno == logging.WARNING:
+            fmt = '{} \x1b[1;31mWRN\x1b[0m {}'.format(date, msg)
+        elif record.levelno == logging.ERROR:
             fmt = '{} \x1b[1;4;31mERR\x1b[0m {}'.format(date, msg)
         else:
             fmt = date + ' ' + msg
