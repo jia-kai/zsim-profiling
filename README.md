@@ -8,7 +8,7 @@ Usage:
 
 1. Add a configuration option:
 
-        sys = {
+        sim = {
             // ...
 
             profileOutputName = "...";
