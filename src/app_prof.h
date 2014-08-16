@@ -62,7 +62,9 @@ class ProfileCost {
 
 class StackContext {
     static BblInfo m_bbl_sentinel;
-    const BblInfo *m_cur_bbl = &m_bbl_sentinel;
+    const BblInfo
+        *m_cur_bbl = &m_bbl_sentinel,   // current BBL processed by the core
+        *m_cur_exe_bbl = nullptr;       // actual BBL currently being executed
 
     // total cycles of the top frame since the function entry,
     // including children
@@ -116,6 +118,10 @@ class StackContext {
     public:
         int depth() const {
             return m_backtrace.size() + 1;
+        }
+
+        void on_exe_bbl_enter(const BblInfo *bbl) {
+            m_cur_exe_bbl = bbl;
         }
 
         void print(size_t max_depth = std::numeric_limits<size_t>::max()) const;

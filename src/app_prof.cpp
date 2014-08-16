@@ -309,12 +309,17 @@ void AppProfiler::exit_all_frame() {
 }
 
 void StackContext::print(size_t max_depth) const {
+    StackContext copy(*this);
+    if (m_cur_bbl != m_cur_exe_bbl)
+        copy.update_noprofiling(m_cur_exe_bbl);
     std::vector<void*> bp;
-    bp.push_back(reinterpret_cast<void*>(m_cur_bbl->addr));
-    for (auto i = m_backtrace.crbegin();
-            i != m_backtrace.crend() && bp.size() < max_depth;
-            i ++)
+    bp.push_back(reinterpret_cast<void*>(copy.m_cur_bbl->addr));
+    for (auto i = copy.m_backtrace.rbegin();
+            i != copy.m_backtrace.rend(); i ++) {
         bp.push_back(reinterpret_cast<void*>(i->caller->addr_end() - 1));
+        if (bp.size() >= max_depth)
+            break;
+    }
     print_backtrace(bp.data(), bp.size());
 }
 
@@ -339,6 +344,9 @@ uint32_t RTNManager::get_id(TRACE trace) {
     if (unlikely(!entry.id)) {
         entry.id = m_addr2entry.size();
         entry.size = is_plt ? 0x10 : RTN_Range(rtn);
+        auto trace_addr = TRACE_Address(trace);
+        assert(trace_addr >= addr &&
+                trace_addr < addr + entry.size);
 #ifdef DUMP_CALL
         rtn_id2name.resize(entry.id + 1);
         rtn_id2name[entry.id] = RTN_Name(rtn);

@@ -173,6 +173,7 @@ VOID PIN_FAST_ANALYSIS_CALL IndirectStoreSingle(THREADID tid, ADDRINT addr) {
 }
 
 VOID PIN_FAST_ANALYSIS_CALL IndirectBasicBlock(THREADID tid, const BblInfo* bblInfo) {
+    zinfo->stackCtxOnBBLEntry[tid].on_exe_bbl_enter(bblInfo);
     fPtrs[tid].bblPtr(tid, bblInfo);
 }
 
