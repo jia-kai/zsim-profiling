@@ -338,7 +338,7 @@ uint32_t RTNManager::get_id(TRACE trace) {
     RTNEntry &entry = m_addr2entry[addr];
     if (unlikely(!entry.id)) {
         entry.id = m_addr2entry.size();
-        entry.size = is_plt ? 0x10 : RTN_Size(rtn);
+        entry.size = is_plt ? 0x10 : RTN_Range(rtn);
 #ifdef DUMP_CALL
         rtn_id2name.resize(entry.id + 1);
         rtn_id2name[entry.id] = RTN_Name(rtn);

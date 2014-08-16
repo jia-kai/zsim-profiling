@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Tue Aug 05 17:37:13 2014 -0700
+# $Date: Fri Aug 15 18:15:26 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -279,9 +279,13 @@ class ProfileResult(object):
             for rtn in self.rtn_list:
                 idx0 = bbl_idx
                 while self.bbl_list[bbl_idx].addr < rtn.begin:
+                    assert self.bbl_list[bbl_idx].addr_last < rtn.begin, \
+                        'BBL crosses RTN boundary'
                     bbl_idx += 1
                 add(bbl_idx)
                 while self.bbl_list[bbl_idx].addr < rtn.end:
+                    assert self.bbl_list[bbl_idx].addr_last < rtn.end, \
+                        'BBL crosses RTN boundary'
                     bbl_idx += 1
                 add(bbl_idx)
                 if idx0 == bbl_idx:
