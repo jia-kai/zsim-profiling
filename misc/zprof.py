@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Fri Aug 15 18:15:26 2014 -0700
+# $Date: Sat Aug 16 14:07:55 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -337,13 +337,14 @@ class ProfileResult(object):
             cur_addr = addr[addr_idx_begin:addr_idx]
             result = self._addr2loc_onefile(
                 ment.path, cur_addr, ment.begin, basedir)
-            assert len(cur_addr) == len(result)
-            addr2loc.update(zip(cur_addr, result))
+            assert set(cur_addr) == set(result.keys())
+            addr2loc.update(result)
 
         for cur in addr[addr_idx:-1]:
             addr2loc[cur] = AbsSourceLocation(cur, Unknown)
 
     def _addr2loc_onefile(self, obj_path, addr, mmap_begin, basedir):
+        """:return: dict mapping from addr to AbsSourceLocation"""
         def relpath(fpath):
             if basedir and fpath.split('/')[:3] == basedir_start:
                 fpath = os.path.relpath(fpath, basedir)
@@ -355,11 +356,14 @@ class ProfileResult(object):
             basedir_start = basedir_start[:NR_PATH_OVERLAP]
 
         if not addr:
-            return []
+            return dict()
 
         if '.so' in obj_path:
             # FIXME better way to test whether it is a relocatable shared obj
             addr = [i - mmap_begin for i in addr]
+            addr_offset = mmap_begin
+        else:
+            addr_offset = 0
 
         addr_brief = addr[:2]
         if len(addr) == 3:
@@ -389,7 +393,7 @@ class ProfileResult(object):
                     subp.returncode, cmd[:-len(addr)] + addr_brief_raw))
         lines = text_result.split('\n')[:-1]
         assert len(lines) == len(addr) * 2
-        result = []
+        result = dict()
         for idx in xrange(len(addr)):
             func = lines[idx * 2]
             src_path, lineno = lines[idx * 2 + 1].split(':')
@@ -408,10 +412,37 @@ class ProfileResult(object):
             except ValueError:
                 lineno = Unknown
 
-            result.append(AbsSourceLocation(
-                addr[idx], obj_path, src_path, func, lineno))
+            result[addr[idx] + addr_offset] = AbsSourceLocation(
+                addr[idx], obj_path, src_path, func, lineno)
+
+        for k, v in self._addr2loc_pltmap(obj_path).iteritems():
+            k += addr_offset
+            if k in result:
+                v = AbsSourceLocation(k - addr_offset, obj_path, func=v)
+                result[k] = v
 
         return result
+
+    def _addr2loc_pltmap(self, obj_path):
+        cmd = ['objdump', '-d', obj_path, '-j', '.plt']
+        subp = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+        text_result = subp.communicate()[0]
+        if subp.returncode:
+            raise RuntimeError('failed to execute {}: returncode={}'.format(
+                cmd, subp.returncode))
+        result = dict()
+        for line in text_result.split('\n'):
+            if 'Disassembly of section' in line or not line.endswith(':'):
+                continue
+            addr, func = line.split()
+            addr = int(addr, 16)
+            func = func[1:-2]
+            if func.endswith('@plt-0x10'):
+                func = 'plt[0]'
+            result[addr] = func
+        return result
+
+
     
     def _load_data(self, fpath):
         """:return: memory map list"""
