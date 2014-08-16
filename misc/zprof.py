@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Sat Aug 16 14:07:55 2014 -0700
+# $Date: Sat Aug 16 14:16:21 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -246,7 +246,9 @@ class ProfileResult(object):
             is_sep = prev.end <= cur.begin
             is_contain = prev.begin <= cur.begin and prev.end >= cur.end
             assert is_sep ^ is_contain, \
-                '{} {} {}'.format(prev, i, self.addr2loc[prev.begin])
+                'disallowed RTN overlap: {}({}) {}({})'.format(
+                    prev, self.addr2loc[prev.begin],
+                    cur, self.addr2loc[cur.begin])
             if is_contain:
                 nr_remove += 1
                 del rtn_list[idx]
@@ -383,7 +385,8 @@ class ProfileResult(object):
         if not os.path.exists(obj_path):
             logger.error('mapped object {} '
                          'does not exist on filesystem'.format(obj_path))
-            return [AbsSourceLocation(i, Unknown) for i in addr]
+            return {i + addr_offset: AbsSourceLocation(i, Unknown)
+                    for i in addr}
 
         subp = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         text_result = subp.communicate()[0]
