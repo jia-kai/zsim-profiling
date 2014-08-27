@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Sat Aug 16 14:07:55 2014 -0700
+# $Date: Tue Aug 26 17:49:10 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -58,6 +58,10 @@ def make_cost_class(name_list):
 
         def raw_str(self):
             return ' '.join([str(getattr(self, i)) for i in name_list])
+
+        @staticmethod
+        def namelist():
+            return name_list
 
         @staticmethod
         def namelist_str():
@@ -246,7 +250,9 @@ class ProfileResult(object):
             is_sep = prev.end <= cur.begin
             is_contain = prev.begin <= cur.begin and prev.end >= cur.end
             assert is_sep ^ is_contain, \
-                '{} {} {}'.format(prev, i, self.addr2loc[prev.begin])
+                'disallowed RTN overlap: {}({}) {}({})'.format(
+                    prev, self.addr2loc[prev.begin],
+                    cur, self.addr2loc[cur.begin])
             if is_contain:
                 nr_remove += 1
                 del rtn_list[idx]
@@ -375,7 +381,7 @@ class ProfileResult(object):
         addr_brief_raw = addr_brief
         addr_brief = '[{}]'.format(', '.join(addr_brief))
 
-        cmd = ['addr2line', '-f', '-C', '-e', obj_path]
+        cmd = ['addr2line', '-afiCe', obj_path]
         obj_path = relpath(obj_path)
         cmd.extend(map(mhex, addr))
 
@@ -383,7 +389,8 @@ class ProfileResult(object):
         if not os.path.exists(obj_path):
             logger.error('mapped object {} '
                          'does not exist on filesystem'.format(obj_path))
-            return [AbsSourceLocation(i, Unknown) for i in addr]
+            return {i + addr_offset: AbsSourceLocation(i, Unknown)
+                    for i in addr}
 
         subp = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         text_result = subp.communicate()[0]
@@ -391,12 +398,22 @@ class ProfileResult(object):
             raise RuntimeError(
                 'failed to execute addr2line: returncode={} cmd={}'.format(
                     subp.returncode, cmd[:-len(addr)] + addr_brief_raw))
-        lines = text_result.split('\n')[:-1]
-        assert len(lines) == len(addr) * 2
+
         result = dict()
-        for idx in xrange(len(addr)):
-            func = lines[idx * 2]
-            src_path, lineno = lines[idx * 2 + 1].split(':')
+
+        text_result += '0x0'
+        line_itr = iter(text_result.split('\n'))
+        cur_loc = None
+        for line in line_itr:
+            if line.startswith('0x'):
+                if cur_loc:
+                    result[cur_addr + addr_offset] = cur_loc
+                cur_addr = int(line[2:], 16)
+                continue
+            if not line:
+                continue
+            func = line
+            src_path, lineno = next(line_itr).split(':')
             if func == '??' or not func:
                 func = Unknown
             if src_path == '??' or not src_path:
@@ -411,9 +428,9 @@ class ProfileResult(object):
                     lineno = Unknown
             except ValueError:
                 lineno = Unknown
+            cur_loc = AbsSourceLocation(
+                cur_addr, obj_path, src_path, func, lineno)
 
-            result[addr[idx] + addr_offset] = AbsSourceLocation(
-                addr[idx], obj_path, src_path, func, lineno)
 
         for k, v in self._addr2loc_pltmap(obj_path).iteritems():
             k += addr_offset
@@ -648,13 +665,35 @@ def convert_callgrind(prof_rst, args):
     with open(args.output, 'w') as fout:
         writer.write(fout)
 
+def print_bbl_detail(prof_rst, addr):
+    addr = int(addr, 16)
+    sys.stdout.write(hex(addr) + ':\n')
+    entry = prof_rst.addr2bbl.get(addr)
+    if not entry:
+        sys.stdout.write('  not found\n')
+        return
+    write = lambda k, v: sys.stdout.write('  {}={}\n'.format(k, v))
+    write('addr_last', mhex(entry.addr_last))
+    write('loc', prof_rst.addr2loc[addr])
+    write('nr_hit', entry.nr_hit)
+    cost = entry.self_cost
+    for name in cost.namelist():
+        write('cost::' + name, getattr(cost, name))
+    for call in entry.call_entry:
+        sys.stdout.write('  call: dest={} cnt={}\n'.format(mhex(call.dest), call.cnt))
+
 def work(args):
     prof_rst = ProfileResult(args)
+
     if args.top:
         show_top(prof_rst, args)
+
     if args.callgrind:
         convert_callgrind(prof_rst, args)
 
+    if args.bbl:
+        for addr in args.bbl:
+            print_bbl_detail(prof_rst, addr)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -670,6 +709,8 @@ def main():
                         help='output in callgrind file format')
     parser.add_argument('--topn', type=int, default=10,
                         help='number of fuctions to show')
+    parser.add_argument('--bbl', action='append',
+                        help='addr of BBLs whose detailed stat would be printed')
     parser.add_argument('input', help='zsim profile')
     args = parser.parse_args()
     work(args)

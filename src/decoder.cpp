@@ -31,6 +31,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <type_traits>
 #include "core.h"
 #include "locks.h"
 #include "log.h"
@@ -57,7 +58,8 @@ static lock_t bblInfoPtrMutex = 0;
 std::vector<BblInfo*> Decoder::bblInfoPtr;
 
 void DynUop::clear() {
-    memset(this, 0, sizeof(DynUop));  // NOTE: This may break if DynUop becomes non-POD
+    static_assert(std::is_pod<DynUop>::value, "DynUop not POD!");
+    memset(this, 0, sizeof(DynUop));
 }
 
 Decoder::Instr::Instr(INS _ins) : ins(_ins), numLoads(0), numInRegs(0), numOutRegs(0), numStores(0) {
@@ -1447,8 +1449,14 @@ BblInfo* Decoder::decodeBbl(BBL bbl, bool oooDecoding) {
 
     //Initialize generic part
     bblInfo->instrs = instrs;
-    bblInfo->bytes = bytes;
+    assert(bytes < BblInfo::BytesLastSize::MAX_BYTES);
     bblInfo->addr = BBL_Address(bbl);
+    bblInfo->byte_lastsize.bytes = bytes;
+    {
+        uint32_t lastSize = bblInfo->addr + bytes - INS_Address(BBL_InsTail(bbl));
+        assert(lastSize < BblInfo::BytesLastSize::MAX_INSTR_SIZE);
+        bblInfo->byte_lastsize.last_instr_size = lastSize;
+    }
     {
         futex_lock(&bblInfoPtrMutex);
         bblInfo->id = bblInfoPtr.size();

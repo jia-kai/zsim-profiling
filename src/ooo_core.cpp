@@ -142,13 +142,6 @@ void OOOCore::store(Address addr) {
     storeAddrs[stores++] = addr;
 }
 
-// Predicated loads and stores call this function, gets recorded as a 0-cycle op.
-// Predication is rare enough that we don't need to model it perfectly to be accurate (i.e. the uops still execute, retire, etc), but this is needed for correctness.
-void OOOCore::predFalseMemOp() {
-    // I'm going to go out on a limb and assume just loads are predicated (this will not fail silently if it's a store)
-    loadAddrs[loads++] = -1L;
-}
-
 void OOOCore::branch(Address pc, bool taken, Address takenNpc, Address notTakenNpc) {
     branchPc = pc;
     branchTaken = taken;
@@ -306,11 +299,14 @@ inline void OOOCore::bbl(const BblInfo* bblInfo) {
                     dispatchCycle = MAX(lastStoreAddrCommitCycle+1, dispatchCycle);
                     
                     Address addr = storeAddrs[storeIdx++];
-                    uint64_t reqSatisfiedCycle = l1d->store(addr, dispatchCycle) + L1D_LAT;
-                    cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
+                    uint64_t reqSatisfiedCycle = dispatchCycle;
+                    if (addr != ((Address)-1L)) {
+                        reqSatisfiedCycle = l1d->store(addr, dispatchCycle) + L1D_LAT;
+                        cRec.record(curCycle, dispatchCycle, reqSatisfiedCycle);
 
-                    // Fill the forwarding table
-                    fwdArray[(addr>>2) & (FWD_ENTRIES-1)].set(addr, reqSatisfiedCycle);
+                        // Fill the forwarding table
+                        fwdArray[(addr>>2) & (FWD_ENTRIES-1)].set(addr, reqSatisfiedCycle);
+                    }
 
                     commitCycle = reqSatisfiedCycle;
                     lastStoreCommitCycle = MAX(lastStoreCommitCycle, reqSatisfiedCycle);
@@ -420,7 +416,7 @@ inline void OOOCore::bbl(const BblInfo* bblInfo) {
     branchPc = 0;  // clear for next BBL
 
     // Simulate current bbl ifetch
-    Address endAddr = bblInfo->addr + bblInfo->bytes;
+    Address endAddr = bblInfo->addr + bblInfo->bytes();
     for (Address fetchAddr = bblInfo->addr; fetchAddr < endAddr; fetchAddr += lineSize) {
         // The Nehalem frontend fetches instructions in 16-byte-wide accesses.
         // Do not model fetch throughput limit here, decoder-generated stalls already include it
@@ -488,29 +484,36 @@ void OOOCore::advance(uint64_t targetCycle) {
 void OOOCore::LoadFunc(THREADID tid, ADDRINT addr) {static_cast<OOOCore*>(cores[tid])->load(addr);}
 void OOOCore::StoreFunc(THREADID tid, ADDRINT addr) {static_cast<OOOCore*>(cores[tid])->store(addr);}
 
+
+// Predication is rare enough that we don't need to model it perfectly to be accurate (i.e. the uops still execute, retire, etc), but this is needed for correctness.
+// recorded as a 0-cycle op
 void OOOCore::PredLoadFunc(THREADID tid, ADDRINT addr, BOOL pred) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
-    if (pred) core->load(addr);
-    else core->predFalseMemOp();
+    if (pred)
+        core->load(addr);
+    else
+        core->loadAddrs[core->loads++] = -1L;
 }
 
 void OOOCore::PredStoreFunc(THREADID tid, ADDRINT addr, BOOL pred) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
-    if (pred) core->store(addr);
-    else core->predFalseMemOp();
+    if (pred)
+        core->store(addr);
+    else
+        core->storeAddrs[core->stores++] = -1L;
 }
 
 void OOOCore::BblFunc(THREADID tid, const BblInfo* bblInfo) {
     OOOCore* core = static_cast<OOOCore*>(cores[tid]);
-    auto startCycle = core->curCycle;
+    auto startCycle = std::max(core->rob.getCurRetireCycle(), core->curCycle);
     auto nrMispred = core->mispredBranches;
     const BblInfo *prevBbl = core->prevBbl;
     core->bbl(bblInfo);
 
     if (likely(prevBbl != nullptr)) {
-        zinfo->appProfiler[tid].update(prevBbl,
-                {core->curCycle - startCycle,
-                core->mispredBranches - nrMispred});
+        auto endCycle = core->rob.getCurRetireCycle();
+        assert(core->curCycle <= endCycle);
+        zinfo->appProfiler[tid].update(prevBbl, {endCycle - startCycle, core->mispredBranches - nrMispred});
     }
 
     while (core->curCycle > core->phaseEndCycle) {

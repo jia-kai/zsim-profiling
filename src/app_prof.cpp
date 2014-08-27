@@ -173,7 +173,7 @@ void AppProfiler::dump_output(FILE *fout, const std::vector<BblProfile>& profile
                 // bbl
                 auto bbl = Decoder::bblId2Ptr(idx);
                 write_int(bbl->addr);
-                write_int(bbl->addr_end() - 1);
+                write_int(bbl->addr_last_instr());
                 write_int(bprof.nr_hit);
                 write_cost(bprof.self_cost);
 
@@ -316,7 +316,7 @@ void StackContext::print(size_t max_depth) const {
     bp.push_back(reinterpret_cast<void*>(copy.m_cur_bbl->addr));
     for (auto i = copy.m_backtrace.rbegin();
             i != copy.m_backtrace.rend(); i ++) {
-        bp.push_back(reinterpret_cast<void*>(i->caller->addr_end() - 1));
+        bp.push_back(reinterpret_cast<void*>(i->caller->addr_last_instr()));
         if (bp.size() >= max_depth)
             break;
     }

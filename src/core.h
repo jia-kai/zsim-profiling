@@ -39,12 +39,26 @@ struct BblInfo {
     uint32_t rtnId = 0;    // id of the routine containing this BBL
     uint32_t id = 0;    // bbls have uniq and consecutive ids, to be used for indexing in the profiler
     uint32_t instrs = 0;
-    uint32_t bytes = 0;
+    struct BytesLastSize {
+        uint32_t last_instr_size:4;
+        uint32_t bytes:28;
+        static constexpr uint32_t MAX_BYTES = 1 << 28, MAX_INSTR_SIZE = 1 << 4;
+    };
+    static_assert(sizeof(BytesLastSize) == sizeof(uint32_t), "WTF?");
+    BytesLastSize byte_lastsize;
     uint64_t addr = 0;
     DynBbl oooBbl[0]; //0 bytes, but will be 1-sized when we have an element (and that element has variable size as well)
 
+    uint64_t bytes() const {
+        return byte_lastsize.bytes;
+    }
+
     uint64_t addr_end() const {
-        return addr + bytes;
+        return addr + byte_lastsize.bytes;
+    }
+
+    uint64_t addr_last_instr() const {
+        return addr_end() - byte_lastsize.last_instr_size;
     }
 };
 

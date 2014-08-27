@@ -309,6 +309,10 @@ class ReorderBuffer {
             return buf[idx];
         }
 
+        inline uint64_t getCurRetireCycle() const {
+            return curRetireCycle;
+        }
+
         inline void markRetire(uint64_t minRetireCycle) {
             if (minRetireCycle <= curRetireCycle) {  // retire with bundle
                 if (curCycleRetires == W) {
@@ -468,10 +472,6 @@ class OOOCore : public Core {
          * to advance the cycle counters in the whole core in lockstep.
          */
         inline void advance(uint64_t targetCycle);
-
-        // Predicated loads and stores call this function, gets recorded as a 0-cycle op.
-        // Predication is rare enough that we don't need to model it perfectly to be accurate (i.e. the uops still execute, retire, etc), but this is needed for correctness.
-        inline void predFalseMemOp();
 
         inline void branch(Address pc, bool taken, Address takenNpc, Address notTakenNpc);
 

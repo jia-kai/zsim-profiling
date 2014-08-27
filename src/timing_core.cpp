@@ -94,7 +94,7 @@ void TimingCore::bblAndRecord(const BblInfo* bblInfo) {
     instrs += bblInfo->instrs;
     curCycle += bblInfo->instrs;
 
-    Address endBblAddr = bblInfo->addr + bblInfo->bytes;
+    Address endBblAddr = bblInfo->addr + bblInfo->bytes();
     for (Address fetchAddr = bblInfo->addr; fetchAddr < endBblAddr; fetchAddr+=(1 << lineBits)) {
         uint64_t startCycle = curCycle;
         curCycle = l1i->load(fetchAddr, curCycle);
