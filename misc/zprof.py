@@ -1,7 +1,6 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Wed Aug 27 10:55:28 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
