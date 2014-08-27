@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 # $File: zprof.py
-# $Date: Tue Aug 26 17:49:10 2014 -0700
+# $Date: Wed Aug 27 10:55:28 2014 -0700
 # $Author: jiakai <jia.kai66@gmail.com>
 
 from ctypes import Structure, c_uint64
@@ -124,6 +124,12 @@ class CallEntry(Structure):
     cost = None
     """instance of class returned by :meth:`make_cost_class`"""
 
+    def merge_with(self, rhs):
+        """merge rhs into self"""
+        assert isinstance(rhs, CallEntry) and self.dest == rhs.dest
+        self.cnt += rhs.cnt
+        self.cost += rhs.cost
+
 
 class MemMapEntry(Structure):
     _fields_ = [('begin', c_uint64), ('end', c_uint64)]
@@ -160,27 +166,6 @@ class FuncProf(object):
         ref_self = weakref.proxy(self)
         for i in bbl_list:
             i.func_prof = ref_self
-
-        self._merge_out_call()
-
-    def _merge_out_call(self):
-        prev = self.bbl_list[0]
-        for cur in self.bbl_list[1:]:
-            prev_dest2ent = {i.dest: i for i in prev.call_entry}
-            for i in cur.call_entry:
-                pent = prev_dest2ent.get(i.dest)
-                if pent:
-                    i.cnt += pent.cnt
-                    i.cost += pent.cost
-                    found = False
-                    for idx, p in enumerate(prev.call_entry):
-                        if p.dest == i.dest:
-                            found = True
-                            del prev.call_entry[idx]
-                            break
-                    assert found
-
-            prev = cur
 
     @property
     def nr_call(self):
@@ -313,6 +298,14 @@ class ProfileResult(object):
             for j in i.call_entry:
                 assert j.dest in self.addr2bbl
                 assert j.dest in self.addr2loc
+            assert len(set(j.dest for j in i.call_entry)) == len(i.call_entry)
+
+        prev = self.bbl_list[0]
+        for cur in self.bbl_list[1:]:
+            assert prev.addr < cur.addr and \
+                (prev.addr_last <= cur.addr or prev.addr_last == cur.addr_last)
+            prev = cur
+
 
     def _init_addr2loc(self, mem_map, basedir):
         addr = set()
@@ -501,8 +494,6 @@ class ProfileResult(object):
                                   for _ in range(nr_call_entry)]
                 bbl_list.append(cur)
 
-            self.addr2bbl = {i.addr: i for i in bbl_list}
-
             logger.info('{} BBL entries loaded'.format(nr_bbl_list))
 
             nr_rtn = readint()
@@ -516,7 +507,63 @@ class ProfileResult(object):
                 cur.path = readstr()
                 mem_map.append(cur)
 
-            return mem_map
+        self._merge_bbl()
+        self.addr2bbl = {i.addr: i for i in bbl_list}
+        return mem_map
+
+
+    def _merge_bbl(self):
+        """merge call to other functions if two BBLs share the same end addr"""
+        bbl_list = self.bbl_list
+        bbl_list.sort(key=lambda x: (x.addr, x.addr_last))
+
+        nr_merge = 0
+        idx = 1
+        while idx < len(bbl_list):
+            prev = bbl_list[idx - 1]
+            cur = bbl_list[idx]
+            if prev.addr == cur.addr and prev.addr_last == cur.addr_last:
+                nr_merge += 1
+                cur.nr_hit += prev.nr_hit
+                cur.self_cost += prev.self_cost
+                cur_dest2ent = {i.dest: i for i in cur.call_entry}
+                for pent in prev.call_entry:
+                    cent = cur_dest2ent.get(pent.dest)
+                    if cent:
+                        cent.merge_with(pent)
+                    else:
+                        cur.call_entry.append(pent)
+                del bbl_list[idx - 1]
+            else:
+                idx += 1
+
+        if nr_merge:
+            logger.warn('{} identical BBL pairs are merged'.format(nr_merge))
+
+        nr_merge = 0
+        prev = bbl_list[0]
+        for cur in bbl_list[1:]:
+            prev_dest2ent = {i.dest: i for i in prev.call_entry}
+            if prev.addr_last == cur.addr_last:
+                for i in cur.call_entry:
+                    pent = prev_dest2ent.get(i.dest)
+                    if pent:
+                        i.merge_with(pent)
+                        found = False
+                        for idx, p in enumerate(prev.call_entry):
+                            if p.dest == i.dest:
+                                found = True
+                                del prev.call_entry[idx]
+                                break
+                        assert found
+                        nr_merge += 1
+
+            prev = cur
+
+        if nr_merge:
+            logger.warn('{} pairs of calls with same '
+                        'ending address are merged'.format(nr_merge))
+
 
 def show_top(prof_rst, args):
     frst = sorted(prof_rst.func_prof, key=lambda i: -i.self_cost.cycle)[:args.topn]
