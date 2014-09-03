@@ -106,6 +106,11 @@ void print_backtrace_zsim() {
     constexpr int MAX_DEPTH = 20;
     void *stack[MAX_DEPTH];
     int depth = backtrace(stack, MAX_DEPTH);
+
+    // use the addr of call instruction
+    for (int i = 0; i < depth; i ++)
+      stack[i] = (void*)((uintptr_t)stack[i] - 1);
+
     fprintf(stderr, "%s[%d] backtrace of pin/zsim:\n", logHeader, PIN_ThreadId());
     print_backtrace(stack, depth);
 }
