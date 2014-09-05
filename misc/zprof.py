@@ -301,8 +301,12 @@ class ProfileResult(object):
 
         prev = self.bbl_list[0]
         for cur in self.bbl_list[1:]:
-            assert prev.addr < cur.addr and prev.addr_last <= cur.addr_last, \
-                map(mhex, [prev.addr, prev.addr_last, cur.addr, cur.addr_last])
+            if not (prev.addr < cur.addr and prev.addr_last <= cur.addr_last):
+                logger.warn('BBL overlap: '
+                            'prev_addr=[{}, {}] next_addr=[{}, {}]'.format(
+                                mhex(prev.addr), mhex(prev.addr_last),
+                                mhex(cur.addr), mhex(cur.addr_last)
+                            ))
             prev = cur
 
 
